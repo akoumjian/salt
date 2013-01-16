@@ -49,6 +49,7 @@ def command(settings_module,
 def syncdb(settings_module,
            bin_env=None,
            migrate=False,
+           all_apps=False,
            database=None,
            pythonpath=None,
            noinput=True):
@@ -67,6 +68,8 @@ def syncdb(settings_module,
     kwargs = {}
     if migrate:
         args.append('migrate')
+    if all_apps:
+        args.append('all')
     if database:
         kwargs['database'] = database
     if noinput:
