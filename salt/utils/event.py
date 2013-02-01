@@ -29,8 +29,8 @@ import zmq
 import salt.payload
 import salt.loader
 import salt.state
+import salt.utils
 from salt._compat import string_types
-from salt.exceptions import SaltSystemExit
 log = logging.getLogger(__name__)
 
 
@@ -57,10 +57,12 @@ class SaltEvent(object):
                     sock_dir,
                     'master_event_pub.ipc'
                     ))
+            salt.utils.check_ipc_path_max_len(puburi)
             pulluri = 'ipc://{0}'.format(os.path.join(
                     sock_dir,
                     'master_event_pull.ipc'
                     ))
+            salt.utils.check_ipc_path_max_len(pulluri)
         else:
             if kwargs.get('ipc_mode', '') == 'tcp':
                 puburi = 'tcp://127.0.0.1:{0}'.format(
@@ -74,29 +76,12 @@ class SaltEvent(object):
                         sock_dir,
                         'minion_event_{0}_pub.ipc'.format(id_hash)
                         ))
+                salt.utils.check_ipc_path_max_len(puburi)
                 pulluri = 'ipc://{0}'.format(os.path.join(
                         sock_dir,
                         'minion_event_{0}_pull.ipc'.format(id_hash)
                         ))
-        for uri in (puburi, pulluri):
-            if uri.startswith('tcp://'):
-                # This check only applies to IPC sockets
-                continue
-            # The socket path is limited to 107 characters on Solaris and
-            # Linux, and 103 characters on BSD-based systems.
-            # Let's fail at the lower level so no system checks are
-            # required.
-            if len(uri) > 103:
-                raise SaltSystemExit(
-                    'The socket path length is more that what ZMQ allows. '
-                    'The length of {0!r} is more than 103 characters. '
-                    'Either try to reduce the length of this setting\'s '
-                    'path or switch to TCP; In the configuration file set '
-                    '"ipc_mode: tcp"'.format(
-                        uri
-                    )
-                )
-
+                salt.utils.check_ipc_path_max_len(pulluri)
         log.debug(
             '{0} PUB socket URI: {1}'.format(self.__class__.__name__, puburi)
         )
@@ -104,7 +89,6 @@ class SaltEvent(object):
             '{0} PULL socket URI: {1}'.format(self.__class__.__name__, pulluri)
         )
         return puburi, pulluri
-
 
     def subscribe(self, tag):
         '''
@@ -147,37 +131,30 @@ class SaltEvent(object):
         wait = wait * 1000
 
         self.subscribe(tag)
-        try:
-            while True:
-                socks = dict(self.poller.poll(wait))
-                if self.sub in socks and socks[self.sub] == zmq.POLLIN:
-                    raw = self.sub.recv()
-                    # Double check the tag
-                    if tag != raw[:20].rstrip('|'):
-                        continue
-                    data = self.serial.loads(raw[20:])
-                    if full:
-                        ret = {'data': data,
-                               'tag': raw[:20].rstrip('|')}
-                        return ret
-                    return data
-                return None
-        finally:
-            # No sense in keeping subscribed to this event
-            self.unsubscribe(tag)
+        while True:
+            socks = dict(self.poller.poll(wait))
+            if self.sub in socks and socks[self.sub] == zmq.POLLIN:
+                raw = self.sub.recv()
+                # Double check the tag
+                if tag != raw[:20].rstrip('|'):
+                    continue
+                data = self.serial.loads(raw[20:])
+                if full:
+                    ret = {'data': data,
+                           'tag': raw[:20].rstrip('|')}
+                    return ret
+                return data
+            return None
 
     def iter_events(self, tag='', full=False):
         '''
         Creates a generator that continuously listens for events
         '''
-        try:
-            while True:
-                data = self.get_event(tag=tag, full=full)
-                if data is None:
-                    continue
-                yield data
-        finally:
-            self.destroy()
+        while True:
+            data = self.get_event(tag=tag, full=full)
+            if data is None:
+                continue
+            yield data
 
     def fire_event(self, data, tag=''):
         '''
@@ -301,7 +278,6 @@ class EventPublisher(Process):
             if self.epull_sock.closed is False:
                 self.epull_sock.setsockopt(zmq.LINGER, 1)
                 self.epull_sock.close()
-        finally:
             if self.context.closed is False:
                 self.context.term()
 

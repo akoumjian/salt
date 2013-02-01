@@ -82,7 +82,7 @@ def available_version(*names):
         installed = _cpv_to_version(_vartree().dep_bestmatch(name))
         avail = _cpv_to_version(_porttree().dep_bestmatch(name))
         if avail:
-            if not installed or compare(installed, avail) == -1:
+            if not installed or compare(pkg1=installed, oper='<', pkg2=avail):
                 ret[name] = avail
 
     # Return a string if only one package name passed
@@ -121,7 +121,7 @@ def _get_upgradable():
     return ret
 
 
-def list_upgrades():
+def list_upgrades(refresh=True):
     '''
     List all available package upgrades.
 
@@ -129,6 +129,9 @@ def list_upgrades():
 
         salt '*' pkg.list_upgrades
     '''
+    # Catch both boolean input from state and string input from CLI
+    if refresh is True or str(refresh).lower() == 'true':
+        refresh_db()
     return _get_upgradable()
 
 
@@ -214,7 +217,12 @@ def refresh_db():
     return __salt__['cmd.retcode']('emerge --sync --quiet') == 0
 
 
-def install(name=None, refresh=False, pkgs=None, sources=None, **kwargs):
+def install(name=None,
+            refresh=False,
+            pkgs=None,
+            sources=None,
+            slot=None,
+            **kwargs):
     '''
     Install the passed package(s), add refresh=True to sync the portage tree
     before package is installed.
@@ -231,6 +239,18 @@ def install(name=None, refresh=False, pkgs=None, sources=None, **kwargs):
 
     refresh
         Whether or not to sync the portage tree before installing.
+
+    version
+        Install a specific version of the package, e.g. 1.0.9-r1. Ignored
+        if "pkgs" or "sources" is passed.
+
+    slot
+        Similar to version, but specifies a valid slot to be installed. It
+        will install the latest available version in the specified slot.
+        Ignored if "pkgs" or "sources" or "version" is passed.
+
+        CLI Example::
+            salt '*' pkg.install sys-devel/gcc slot='4.4'
 
 
     Multiple Package Installation Options:
@@ -257,7 +277,7 @@ def install(name=None, refresh=False, pkgs=None, sources=None, **kwargs):
                        'new': '<new-version>'}}
     '''
 
-    logging.debug('Called modules.pkg.install: {0}'.format(
+    log.debug('Called modules.pkg.install: {0}'.format(
         {
             'name': name,
             'refresh': refresh,
@@ -267,12 +287,21 @@ def install(name=None, refresh=False, pkgs=None, sources=None, **kwargs):
         }
     ))
     # Catch both boolean input from state and string input from CLI
-    if refresh is True or refresh == 'True':
+    if refresh is True or str(refresh).lower() == 'true':
         refresh_db()
 
     pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](name,
                                                                   pkgs,
                                                                   sources)
+
+    # Handle version kwarg for a single package target
+    if pkgs is None and sources is None:
+        version = kwargs.get('version')
+        if version:
+            pkg_params = {name: version}
+        elif slot is not None:
+            pkg_params = {name: ':{0}'.format(slot)}
+
     if pkg_params is None or len(pkg_params) == 0:
         return {}
     elif pkg_type == 'file':
@@ -280,7 +309,26 @@ def install(name=None, refresh=False, pkgs=None, sources=None, **kwargs):
     else:
         emerge_opts = ''
 
-    cmd = 'emerge --quiet {0} {1}'.format(emerge_opts, ' '.join(pkg_params))
+    if pkg_type == 'repository':
+        targets = list()
+        for param, version in pkg_params.iteritems():
+            if version is None:
+                targets.append(param)
+            elif version.startswith(':'):
+                # Really this 'version' is a slot
+                targets.append('{0}{1}'.format(param, version))
+            else:
+                match = re.match('^([<>])?(=)?([^<>=]+)$', version)
+                if match:
+                    gt_lt, eq, verstr = match.groups()
+                    prefix = gt_lt or ''
+                    prefix += eq or ''
+                    # If no prefix characters were supplied, use '='
+                    prefix = prefix or '='
+                    targets.append('"{0}{1}-{2}"'.format(prefix, param, verstr))
+    else:
+        targets = pkg_params
+    cmd = 'emerge --quiet {0} {1}'.format(emerge_opts, ' '.join(targets))
     old = list_pkgs()
     stderr = __salt__['cmd.run_all'](cmd).get('stderr', '')
     if stderr:
@@ -289,9 +337,13 @@ def install(name=None, refresh=False, pkgs=None, sources=None, **kwargs):
     return __salt__['pkg_resource.find_changes'](old, new)
 
 
-def update(pkg, refresh=False):
+def update(pkg, slot=None, refresh=False):
     '''
     Updates the passed package (emerge --update package)
+
+    slot
+        Restrict the update to a particular slot. It will update to the
+        latest version within the slot.
 
     Return a dict containing the new package names and versions::
 
@@ -305,9 +357,14 @@ def update(pkg, refresh=False):
     if(refresh):
         refresh_db()
 
+    if slot is not None:
+        full_atom = '{0}:{1}'.format(pkg, slot)
+    else:
+        full_atom = pkg
+
     ret_pkgs = {}
     old_pkgs = list_pkgs()
-    cmd = 'emerge --update --newuse --oneshot --quiet {0}'.format(pkg)
+    cmd = 'emerge --update --newuse --oneshot --quiet {0}'.format(full_atom)
     __salt__['cmd.retcode'](cmd)
     new_pkgs = list_pkgs()
 
@@ -317,15 +374,15 @@ def update(pkg, refresh=False):
                 continue
             else:
                 ret_pkgs[pkg] = {'old': old_pkgs[pkg],
-                             'new': new_pkgs[pkg]}
+                                 'new': new_pkgs[pkg]}
         else:
             ret_pkgs[pkg] = {'old': '',
-                         'new': new_pkgs[pkg]}
+                             'new': new_pkgs[pkg]}
 
     return ret_pkgs
 
 
-def upgrade(refresh=False):
+def upgrade(refresh=True):
     '''
     Run a full system upgrade (emerge --update world)
 
@@ -338,7 +395,8 @@ def upgrade(refresh=False):
 
         salt '*' pkg.upgrade
     '''
-    if(refresh):
+    # Catch both boolean input from state and string input from CLI
+    if refresh is True or str(refresh).lower() == 'true':
         refresh_db()
 
     ret_pkgs = {}
@@ -361,9 +419,12 @@ def upgrade(refresh=False):
     return ret_pkgs
 
 
-def remove(pkg):
+def remove(pkg, slot=None, **kwargs):
     '''
     Remove a single package via emerge --unmerge
+
+    slot
+        Restrict the remove to a specific slot.
 
     Return a list containing the names of the removed packages:
 
@@ -374,7 +435,12 @@ def remove(pkg):
     ret_pkgs = []
     old_pkgs = list_pkgs()
 
-    cmd = 'emerge --unmerge --quiet --quiet-unmerge-warn {0}'.format(pkg)
+    if slot is not None:
+        full_atom = '{0}:{1}'.format(pkg, slot)
+    else:
+        full_atom = pkg
+
+    cmd = 'emerge --unmerge --quiet --quiet-unmerge-warn {0}'.format(full_atom)
     __salt__['cmd.retcode'](cmd)
     new_pkgs = list_pkgs()
 
@@ -385,7 +451,7 @@ def remove(pkg):
     return ret_pkgs
 
 
-def purge(pkg):
+def purge(pkg, **kwargs):
     '''
     Portage does not have a purge, this function calls remove followed
     by depclean to emulate a purge process
@@ -400,11 +466,14 @@ def purge(pkg):
     return remove(pkg) + depclean()
 
 
-def depclean(pkg=None):
+def depclean(pkg=None, slot=None):
     '''
     Portage has a function to remove unused dependencies. If a package
     is provided, it will only removed the package if no other package
     depends on it.
+
+    slot
+        Restrict the remove to a specific slot. Ignored if pkg is None
 
     Return a list containing the removed packages:
 
@@ -415,7 +484,12 @@ def depclean(pkg=None):
     ret_pkgs = []
     old_pkgs = list_pkgs()
 
-    cmd = 'emerge --depclean --quiet {0}'.format(pkg)
+    if pkg is not None and slot is not None:
+        full_atom = '{0}:{1}'.format(pkg, slot)
+    else:
+        full_atom = pkg
+
+    cmd = 'emerge --depclean --quiet {0}'.format(full_atom)
     __salt__['cmd.retcode'](cmd)
     new_pkgs = list_pkgs()
 
@@ -426,14 +500,27 @@ def depclean(pkg=None):
     return ret_pkgs
 
 
-def compare(version1='', version2=''):
+def perform_cmp(pkg1='', pkg2=''):
     '''
-    Compare two version strings. Return -1 if version1 < version2,
-    0 if version1 == version2, and 1 if version1 > version2. Return None if
-    there was a problem making the comparison.
+    Do a cmp-style comparison on two packages. Return -1 if pkg1 < pkg2, 0 if
+    pkg1 == pkg2, and 1 if pkg1 > pkg2. Return None if there was a problem
+    making the comparison.
 
     CLI Example::
 
-        salt '*' pkg.compare '0.2.4-0' '0.2.4.1-0'
+        salt '*' pkg.perform_cmp '0.2.4-0' '0.2.4.1-0'
+        salt '*' pkg.perform_cmp pkg1='0.2.4-0' pkg2='0.2.4.1-0'
     '''
-    return __salt__['pkg_resource.compare'](version1, version2)
+    return __salt__['pkg_resource.perform_cmp'](pkg1=pkg1, pkg2=pkg2)
+
+
+def compare(pkg1='', oper='==', pkg2=''):
+    '''
+    Compare two version strings.
+
+    CLI Example::
+
+        salt '*' pkg.compare '0.2.4-0' '<' '0.2.4.1-0'
+        salt '*' pkg.compare pkg1='0.2.4-0' oper='<' pkg2='0.2.4.1-0'
+    '''
+    return __salt__['pkg_resource.compare'](pkg1=pkg1, oper=oper, pkg2=pkg2)

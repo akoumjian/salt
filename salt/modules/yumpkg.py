@@ -6,6 +6,7 @@ Support for YUM
 '''
 
 # Import python libs
+import yaml
 import os
 import logging
 
@@ -93,6 +94,11 @@ def _list_removed(old, new):
     '''
     List the packages which have been removed between the two package objects
     '''
+    # Force input to be a list so below loop works
+    if not isinstance(old, list):
+        old = [old]
+    if not isinstance(new, list):
+        new = [new]
     pkgs = []
     for pkg in old:
         if pkg not in new:
@@ -101,7 +107,7 @@ def _list_removed(old, new):
     return pkgs
 
 
-def list_upgrades(*args):
+def list_upgrades(refresh=True):
     '''
     Check whether or not an upgrade is available for all packages
 
@@ -109,6 +115,10 @@ def list_upgrades(*args):
 
         salt '*' pkg.list_upgrades
     '''
+    # Catch both boolean input from state and string input from CLI
+    if refresh is True or str(refresh).lower() == 'true':
+        refresh_db()
+
     pkgs = list_pkgs()
 
     yumbase = yum.YumBase()
@@ -158,7 +168,7 @@ def available_version(*names):
         )
         for pkg in exactmatch:
             if pkg.name in ret \
-            and (pkg.arch == getBaseArch() or pkg.arch == 'noarch'):
+                    and (pkg.arch == getBaseArch() or pkg.arch == 'noarch'):
                 ret[pkg.name] = '-'.join([pkg.version, pkg.release])
 
     # Return a string if only one package name passed
@@ -194,7 +204,7 @@ def version(*names):
     ret = {}
     pkgs = list_pkgs()
     for name in names:
-        ret[name] = pkgs.get(name,'')
+        ret[name] = pkgs.get(name, '')
     # Return a string if only one package name passed
     if len(names) == 1:
         return ret[names[0]]
@@ -247,8 +257,89 @@ def clean_metadata():
     return refresh_db()
 
 
-def install(name=None, refresh=False, fromrepo=None, skip_verify=False,
-            pkgs=None, sources=None, **kwargs):
+def group_install(name=None,
+                  groups=None,
+                  skip=None,
+                  include=None,
+                  **kwargs):
+    '''
+    Install the passed package group(s). This is basically a wrapper around
+    pkg.install, which performs package group resolution for the user. This
+    function is currently considered "experimental", and should be expected to
+    undergo changes before it becomes official.
+
+    name
+        The name of a single package group to install. Note that this option is
+        ignored if "groups" is passed.
+
+    groups
+        The names of multiple packages which are to be installed.
+
+        CLI Example::
+    
+            salt '*' pkg.groupinstall groups='["Group 1", "Group 2"]'
+
+    skip
+        The name(s), in a list, of any packages that would normally be
+        installed by the package group ("default" packages), which should not
+        be installed.
+
+        CLI Examples::
+    
+            salt '*' pkg.groupinstall 'My Group' skip='["foo", "bar"]'
+
+    include
+        The name(s), in a list, of any packages which are included in a group,
+        which would not normally be installed ("optional" packages). Note that
+        this will nor enforce group membership; if you include packages which
+        are not members of the specified groups, they will still be installed.
+
+        CLI Examples::
+    
+            salt '*' pkg.groupinstall 'My Group' include='["foo", "bar"]'
+
+    other arguments
+        Because this is essentially a wrapper around pkg.install, any argument
+        which can be passed to pkg.install may also be included here, and it
+        will be passed along wholesale.
+    '''
+    pkg_groups = []
+    if groups:
+        pkg_groups = yaml.safe_load(groups)
+    else:
+        pkg_groups.append(name)
+
+    skip_pkgs = []
+    if skip:
+        skip_pkgs = yaml.safe_load(skip)
+
+    include = []
+    if include:
+        include = yaml.safe_load(include)
+
+    ret = {}
+    pkgs = []
+    for group in pkg_groups:
+        group_detail = group_info(group)
+        for package in group_detail['mandatory packages'].keys():
+            pkgs.append(package)
+        for package in group_detail['default packages'].keys():
+            if package not in skip_pkgs:
+                pkgs.append(package)
+        for package in include:
+            pkgs.append(package)
+
+    install_pkgs = yaml.safe_dump(pkgs)
+    return install(pkgs=install_pkgs, **kwargs)
+
+
+def install(name=None,
+            refresh=False,
+            fromrepo=None,
+            skip_verify=False,
+            pkgs=None,
+            sources=None,
+            **kwargs):
     '''
     Install the passed package(s), add refresh=True to clean the yum database
     before package is installed.
@@ -264,13 +355,13 @@ def install(name=None, refresh=False, fromrepo=None, skip_verify=False,
             salt '*' pkg.install <package name>
 
     refresh
-        Whether or not to clean the yum database before executing.
+        Whether or not to update the yum database before executing.
 
     skip_verify
         Skip the GPG verification check. (e.g., ``--nogpgcheck``)
 
     version
-        Install a specific version of the package, e.g. 1.0.9. Ignored
+        Install a specific version of the package, e.g. 1.2.3-4.el6. Ignored
         if "pkgs" or "sources" is passed.
 
 
@@ -293,10 +384,13 @@ def install(name=None, refresh=False, fromrepo=None, skip_verify=False,
 
     pkgs
         A list of packages to install from a software repository. Must be
-        passed as a python list.
+        passed as a python list. A specific version number can be specified
+        by using a single-element dict representing the package and its
+        version.
 
-        CLI Example::
-            salt '*' pkg.install pkgs='["foo","bar"]'
+        CLI Examples::
+            salt '*' pkg.install pkgs='["foo", "bar"]'
+            salt '*' pkg.install pkgs='["foo", {"bar": "1.2.3-4.el6"}]'
 
     sources
         A list of RPM packages to install. Must be passed as a list of dicts,
@@ -312,14 +406,8 @@ def install(name=None, refresh=False, fromrepo=None, skip_verify=False,
         {'<package>': {'old': '<old-version>',
                        'new': '<new-version>'}}
     '''
-
-    # This allows modules to specify the version in a kwarg, like the other
-    # package modules
-    if kwargs.get('version') and pkgs is None and sources is None:
-        name = '{0}-{1}'.format(name, kwargs.get('version'))
-
     # Catch both boolean input from state and string input from CLI
-    if refresh is True or refresh == 'True':
+    if refresh is True or str(refresh).lower() == 'true':
         refresh_db()
 
     pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](name,
@@ -338,6 +426,15 @@ def install(name=None, refresh=False, fromrepo=None, skip_verify=False,
     disablerepo = kwargs.get('disablerepo', '')
     enablerepo = kwargs.get('enablerepo', '')
     repo = kwargs.get('repo', '')
+
+    version = kwargs.get('version')
+    if version:
+        if pkgs is None and sources is None:
+            # Allow "version" to work for single package target
+            pkg_params = {name: version}
+        else:
+            log.warning('"version" parameter will be ignored for muliple '
+                        'package targets')
 
     # Support old "repo" argument
     if not fromrepo and repo:
@@ -372,6 +469,9 @@ def install(name=None, refresh=False, fromrepo=None, skip_verify=False,
                     log.info('Upgrade failed, trying local downgrade')
                     yumbase.downgradeLocal(target)
             else:
+                version = pkg_params[target]
+                if version is not None:
+                    target = '{0}-{1}'.format(target, version)
                 log.info('Selecting "{0}" for installation'.format(target))
                 # Changed to pattern to allow specific package versions
                 installed = yumbase.install(pattern=target)
@@ -399,7 +499,7 @@ def install(name=None, refresh=False, fromrepo=None, skip_verify=False,
     return __salt__['pkg_resource.find_changes'](old, new)
 
 
-def upgrade():
+def upgrade(refresh=True):
     '''
     Run a full system upgrade, a yum upgrade
 
@@ -412,6 +512,9 @@ def upgrade():
 
         salt '*' pkg.upgrade
     '''
+    # Catch both boolean input from state and string input from CLI
+    if refresh is True or str(refresh).lower() == 'true':
+        refresh_db()
 
     yumbase = yum.YumBase()
     setattr(yumbase.conf, 'assumeyes', True)
@@ -437,7 +540,7 @@ def upgrade():
     return __salt__['pkg_resource.find_changes'](old, new)
 
 
-def remove(pkgs):
+def remove(pkgs, **kwargs):
     '''
     Removes packages with yum remove
 
@@ -470,7 +573,7 @@ def remove(pkgs):
     return _list_removed(old, new)
 
 
-def purge(pkgs):
+def purge(pkgs, **kwargs):
     '''
     Yum does not have a purge, this function calls remove
 
@@ -491,55 +594,16 @@ def verify(*package):
 
         salt '*' pkg.verify
     '''
-    ftypes = {'c': 'config',
-              'd': 'doc',
-              'g': 'ghost',
-              'l': 'license',
-              'r': 'readme'}
-    ret = {}
-    if package:
-        packages = ' '.join(package)
-        cmd = 'rpm -V {0}'.format(packages)
-    else:
-        cmd = 'rpm -Va'
-    for line in __salt__['cmd.run'](cmd).split('\n'):
-        fdict = {'mismatch': []}
-        if 'missing' in line:
-            line = ' ' + line
-            fdict['missing'] = True
-            del(fdict['mismatch'])
-        fname = line[13:]
-        if line[11:12] in ftypes:
-            fdict['type'] = ftypes[line[11:12]]
-        if line[0:1] == 'S':
-            fdict['mismatch'].append('size')
-        if line[1:2] == 'M':
-            fdict['mismatch'].append('mode')
-        if line[2:3] == '5':
-            fdict['mismatch'].append('md5sum')
-        if line[3:4] == 'D':
-            fdict['mismatch'].append('device major/minor number')
-        if line[4:5] == 'L':
-            fdict['mismatch'].append('readlink path')
-        if line[5:6] == 'U':
-            fdict['mismatch'].append('user')
-        if line[6:7] == 'G':
-            fdict['mismatch'].append('group')
-        if line[7:8] == 'T':
-            fdict['mismatch'].append('mtime')
-        if line[8:9] == 'P':
-            fdict['mismatch'].append('capabilities')
-        ret[fname] = fdict
-    return ret
+    return __salt__['lowpkg.verify'](*package)
 
 
-def grouplist():
+def group_list():
     '''
     Lists all groups known by yum on this system
 
     CLI Example::
 
-        salt '*' pkg.grouplist
+        salt '*' pkg.group_list
     '''
     ret = {'installed': [], 'available': [], 'available languages': {}}
     yumbase = yum.YumBase()
@@ -556,7 +620,7 @@ def grouplist():
     return ret
 
 
-def groupinfo(groupname):
+def group_info(groupname):
     '''
     Lists packages belonging to a certain group
 
@@ -573,6 +637,48 @@ def groupinfo(groupname):
                     'default packages': group.default_packages,
                     'conditional packages': group.conditional_packages,
                     'description': group.description}
+
+
+def group_diff(groupname):
+    '''
+    Lists packages belonging to a certain group, and which are installed
+
+    CLI Example::
+
+        salt '*' pkg.group_diff 'Perl Support'
+    '''
+    ret = {
+        'mandatory packages': {'installed': [], 'not installed': []},
+        'optional packages': {'installed': [], 'not installed': []},
+        'default packages': {'installed': [], 'not installed': []},
+        'conditional packages': {'installed': [], 'not installed': []},
+    }
+    pkgs = list_pkgs()
+    yumbase = yum.YumBase()
+    (installed, available) = yumbase.doGroupLists()
+    for group in installed:
+        if group.name == groupname:
+            for pkg in group.mandatory_packages:
+                if pkg in pkgs:
+                    ret['mandatory packages']['installed'].append(pkg)
+                else:
+                    ret['mandatory packages']['not installed'].append(pkg)
+            for pkg in group.optional_packages:
+                if pkg in pkgs:
+                    ret['optional packages']['installed'].append(pkg)
+                else:
+                    ret['optional packages']['not installed'].append(pkg)
+            for pkg in group.default_packages:
+                if pkg in pkgs:
+                    ret['default packages']['installed'].append(pkg)
+                else:
+                    ret['default packages']['not installed'].append(pkg)
+            for pkg in group.conditional_packages:
+                if pkg in pkgs:
+                    ret['conditional packages']['installed'].append(pkg)
+                else:
+                    ret['conditional packages']['not installed'].append(pkg)
+            return {groupname: ret}
 
 
 def list_repos(basedir='/etc/yum.repos.d'):
@@ -655,7 +761,7 @@ def del_repo(repo, basedir='/etc/yum.repos.d'):
     if onlyrepo:
         os.remove(repofile)
         return 'File {0} containing repo {1} has been removed'.format(
-                                                            repofile, repo)
+            repofile, repo)
 
     # There must be other repos in this file, write the file with them
     header, filerepos = _parse_repo_file(repofile)
@@ -739,11 +845,11 @@ def mod_repo(repo, basedir=None, **kwargs):
     # Error out if they tried to delete baseurl or mirrorlist improperly
     if 'baseurl' in todelete:
         if 'mirrorlist' not in kwargs and 'mirrorlist' \
-                        not in filerepos[repo].keys():
+                not in filerepos[repo].keys():
             return 'Error: Cannot delete baseurl without specifying mirrorlist'
     if 'mirrorlist' in todelete:
         if 'baseurl' not in kwargs and 'baseurl' \
-                        not in filerepos[repo].keys():
+                not in filerepos[repo].keys():
             return 'Error: Cannot delete mirrorlist without specifying baseurl'
 
     # Delete anything in the todelete list
@@ -804,14 +910,59 @@ def _parse_repo_file(filename):
 
     return (header, repos)
 
-def compare(version1='', version2=''):
+
+def perform_cmp(pkg1='', pkg2=''):
     '''
-    Compare two version strings. Return -1 if version1 < version2,
-    0 if version1 == version2, and 1 if version1 > version2. Return None if
-    there was a problem making the comparison.
+    Do a cmp-style comparison on two packages. Return -1 if pkg1 < pkg2, 0 if
+    pkg1 == pkg2, and 1 if pkg1 > pkg2. Return None if there was a problem
+    making the comparison.
 
     CLI Example::
 
-        salt '*' pkg.compare '0.2.4-0' '0.2.4.1-0'
+        salt '*' pkg.perform_cmp '0.2.4-0' '0.2.4.1-0'
+        salt '*' pkg.perform_cmp pkg1='0.2.4-0' pkg2='0.2.4.1-0'
     '''
-    return __salt__['pkg_resource.compare'](version1, version2)
+    return __salt__['pkg_resource.perform_cmp'](pkg1=pkg1, pkg2=pkg2)
+
+
+def compare(pkg1='', oper='==', pkg2=''):
+    '''
+    Compare two version strings.
+
+    CLI Example::
+
+        salt '*' pkg.compare '0.2.4-0' '<' '0.2.4.1-0'
+        salt '*' pkg.compare pkg1='0.2.4-0' oper='<' pkg2='0.2.4.1-0'
+    '''
+    return __salt__['pkg_resource.compare'](pkg1=pkg1, oper=oper, pkg2=pkg2)
+
+
+def file_list(*packages):
+    '''
+    List the files that belong to a package. Not specifying any packages will
+    return a list of _every_ file on the system's rpm database (not generally
+    recommended).
+
+    CLI Examples::
+
+        salt '*' pkg.file_list httpd
+        salt '*' pkg.file_list httpd postfix
+        salt '*' pkg.file_list
+    '''
+    return __salt__['lowpkg.file_list'](*packages)
+
+
+
+def file_dict(*packages):
+    '''
+    List the files that belong to a package, grouped by package. Not
+    specifying any packages will return a list of _every_ file on the system's
+    rpm database (not generally recommended).
+
+    CLI Examples::
+
+        salt '*' pkg.file_list httpd
+        salt '*' pkg.file_list httpd postfix
+        salt '*' pkg.file_list
+    '''
+    return __salt__['lowpkg.file_dict'](*packages)

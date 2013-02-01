@@ -9,6 +9,7 @@ When using the git file server backend,
 import os
 import time
 import hashlib
+import logging
 
 # Import third party libs
 HAS_GIT = False
@@ -23,13 +24,21 @@ import salt.utils
 import salt.fileserver
 
 
+log = logging.getLogger(__name__)
+
 def __virtual__():
     '''
     Only load if gitpython is available
     '''
     if not isinstance(__opts__['gitfs_remotes'], list):
         return False
-    return 'git' if HAS_GIT else False
+    if not 'git' in __opts__['fileserver_backend']:
+        return False
+    if not HAS_GIT:
+        log.error('Git fileserver backend is enabled in configuration but '
+                  'could not be loaded, is git-python installed?')
+        return False
+    return 'git'
 
 
 def _get_ref(repo, short):
@@ -37,10 +46,7 @@ def _get_ref(repo, short):
     Return bool if the short ref is in the repo
     '''
     for ref in repo.refs:
-        if isinstance(ref, git.TagReference):
-            if short == os.path.basename(ref.name):
-                return ref
-        elif isinstance(ref, git.Head):
+        if isinstance(ref, git.RemoteReference):
             if short == os.path.basename(ref.name):
                 return ref
     return False
@@ -98,11 +104,15 @@ def init():
         rp_ = os.path.join(bp_, str(ind))
         if not os.path.isdir(rp_):
             os.makedirs(rp_)
-        repo = git.Repo.init(rp_, bare=True)
+        repo = git.Repo.init(rp_)
         if not repo.remotes:
             try:
                 repo.create_remote('origin', __opts__['gitfs_remotes'][ind])
             except Exception:
+                # This exception occurs when two processes are trying to write
+                # to the git config at once, go ahead and pass over it since
+                # this is the only write
+                # This should place a lock down
                 pass
         if repo.remotes:
             repos.append(repo)
@@ -125,19 +135,6 @@ def update():
             os.remove(lk_fn)
         except (OSError, IOError):
             pass
-        for ref in repo.refs:
-            if isinstance(ref, git.refs.remote.RemoteReference):
-                found = False
-                short = os.path.basename(ref.name)
-                for branch in repo.branches:
-                    if os.path.basename(branch.name) == short:
-                        # Found it, make sure it has the correct ref
-                        if not branch.tracking_branch() is ref:
-                            branch.set_tracking_branch(ref)
-                            found = True
-                if not found:
-                    branch = repo.create_head(short, ref)
-                    branch.set_tracking_branch(ref)
 
 
 def envs():
@@ -156,7 +153,7 @@ def envs():
     return list(ret)
 
 
-def find_file(path, short='base'):
+def find_file(path, short='base', **kwargs):
     '''
     Find the first file to match the path and ref, read the file out of git
     and send the path to the newly cached file
@@ -190,6 +187,15 @@ def find_file(path, short='base'):
     if not os.path.isdir(shadir):
         os.makedirs(shadir)
     repos = init()
+    if 'index' in kwargs:
+        try:
+            repos = [repos[int(kwargs['index'])]]
+        except IndexError:
+            # Invalid index param
+            return fnd
+        except ValueError:
+            # Invalid index option
+            return fnd
     for repo in repos:
         ref = _get_ref(repo, short)
         if not ref:
