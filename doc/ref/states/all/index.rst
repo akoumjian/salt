@@ -18,12 +18,14 @@ Full list of builtin state modules
     file
     gem
     git
+    grains
     group
     hg
     host
     keyboard
     kmod
     layman
+    libvirt
     locale
     makeconf
     module

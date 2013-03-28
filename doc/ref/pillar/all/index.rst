@@ -15,3 +15,5 @@ Full list of builtin pillar modules
     hiera
     mongo
     pillar_ldap
+    puppet
+    cobbler

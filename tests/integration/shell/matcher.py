@@ -43,6 +43,17 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         data = '\n'.join(data)
         self.assertIn('minion', data)
         self.assertNotIn('sub_minion', data)
+        match = 'P@test_grain:^cheese$ and * and G@test_grain:cheese'
+        data = self.run_salt('-t 1 -C \'{0}\' test.ping'.format(match))
+        data = '\n'.join(data)
+        self.assertIn('minion', data)
+        self.assertNotIn('sub_minion', data)
+        match = 'L@sub_minion and E@.*'
+        data = self.run_salt('-t 1 -C "{0}" test.ping'.format(match))
+        data = '\n'.join(data)
+        self.assertIn('sub_minion', data)
+        self.assertNotIn('minion', data.replace('sub_minion', 'stub'))
+
 
     def test_glob(self):
         '''
@@ -92,6 +103,12 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         data = '\n'.join(data)
         self.assertIn('sub_minion', data)
         self.assertNotIn('minion', data.replace('sub_minion', 'stub'))
+        data = self.run_salt('-G "planets:pluto" test.ping')
+        self.assertEqual(
+            ''.join(data),
+            'No minions matched the target. No command was sent, no jid was '
+            'assigned.'
+        )
         # Nested grain (string value)
         data = self.run_salt('-t 1 -G "level1:level2:foo" test.ping')
         data = '\n'.join(data)
@@ -156,21 +173,6 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         self.assertIn('minion', data)
         self.assertIn('sub_minion', data)
 
-    def test_compound(self):
-        '''
-        test compound matcher
-        '''
-        match = 'P@test_grain:^cheese$ and * and G@test_grain:cheese'
-        data = self.run_salt('-t 1 -C \'{0}\' test.ping'.format(match))
-        data = '\n'.join(data)
-        self.assertIn('minion', data)
-        self.assertNotIn('sub_minion', data)
-        match = 'L@sub_minion and E@.*'
-        data = self.run_salt('-t 1 -C "{0}" test.ping'.format(match))
-        data = '\n'.join(data)
-        self.assertIn('sub_minion', data)
-        self.assertNotIn('minion', data.replace('sub_minion', 'stub'))
-
     def test_exsel(self):
         data = self.run_salt('-X test.ping test.ping')
         data = '\n'.join(data)
@@ -201,7 +203,7 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         '''
         Test to see if we're supporting --doc
         '''
-        data = self.run_salt('-d user.add')
+        data = self.run_salt('-d \* user')
         self.assertIn('user.add:', data)
 
     def test_salt_documentation_arguments_not_assumed(self):
@@ -212,11 +214,11 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         self.assertIn('user.add:', data)
         data = self.run_salt('\'*\' -d')
         self.assertIn('user.add:', data)
-        data = self.run_salt('\'*\' -d user.add')
+        data = self.run_salt('\'*\' -d user')
         self.assertIn('user.add:', data)
-        data = self.run_salt('\'*\' sys.doc -d user.add')
+        data = self.run_salt('\'*\' sys.doc -d user')
         self.assertIn('user.add:', data)
-        data = self.run_salt('\'*\' sys.doc user.add')
+        data = self.run_salt('\'*\' sys.doc user')
         self.assertIn('user.add:', data)
 
 

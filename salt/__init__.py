@@ -19,7 +19,7 @@ try:
 except ImportError as e:
     if e.args[0] != 'No module named _msgpack':
         raise
-
+from salt.exceptions import SaltSystemExit
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class Master(parsers.MasterOptionParser):
             sys.exit(err.errno)
 
         self.setup_logfile_logger()
-        logger.warn('Setting up the Salt Master')
+        logger.info('Setting up the Salt Master')
 
         if not verify_socket(self.config['interface'],
                              self.config['publish_port'],
@@ -126,10 +126,18 @@ class Minion(parsers.MinionOptionParser):
 
         try:
             if self.config['verify_env']:
-                confd = os.path.join(
-                    os.path.dirname(self.config['conf_file']),
-                    'minion.d'
-                )
+                confd = self.config.get('default_include')
+                if confd:
+                  # If 'default_include' is specified in config, then use it
+                  if '*' in confd:
+                      # Value is of the form "minion.d/*.conf"
+                      confd = os.path.dirname(confd)
+                  if not os.path.isabs(confd):
+                      # If configured 'default_include' is not an absolute path,
+                      # consider it relative to folder of 'conf_file' (/etc/salt by default)
+                      confd = os.path.join(os.path.dirname(self.config['conf_file']), confd)
+                else:
+                    confd = os.path.join(os.path.dirname(self.config['conf_file']), 'minion.d')
                 verify_env(
                     [
                         self.config['pki_dir'],
@@ -157,7 +165,7 @@ class Minion(parsers.MinionOptionParser):
             sys.exit(err.errno)
 
         self.setup_logfile_logger()
-        logger.warn(
+        logger.info(
             'Setting up the Salt Minion "{0}"'.format(
                 self.config['id']
             )
@@ -170,8 +178,8 @@ class Minion(parsers.MinionOptionParser):
         # the boot process waiting for a key to be accepted on the master.
         # This is the latest safe place to daemonize
         self.daemonize_if_required()
-        self.minion = salt.minion.Minion(self.config)
         self.set_pidfile()
+        self.minion = salt.minion.Minion(self.config)
 
     def start(self):
         '''
@@ -187,8 +195,13 @@ class Minion(parsers.MinionOptionParser):
         try:
             if check_user(self.config['user']):
                 self.minion.tune_in()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, SaltSystemExit) as e:
             logger.warn('Stopping the Salt Minion')
+            if isinstance(e, KeyboardInterrupt):
+                logger.warn('Exiting on Ctrl-c')
+            else:
+                logger.error(str(e))
+        finally:
             self.shutdown()
 
     def shutdown(self):
@@ -236,7 +249,7 @@ class Syndic(parsers.SyndicOptionParser):
             sys.exit(err.errno)
 
         self.setup_logfile_logger()
-        logger.warn(
+        logger.info(
             'Setting up the Salt Syndic Minion "{0}"'.format(
                 self.config['id']
             )

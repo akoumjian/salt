@@ -13,6 +13,7 @@ Manage events
 # to read is the same module to fire off events.
 
 # Import python libs
+import time
 import os
 import fnmatch
 import glob
@@ -24,6 +25,7 @@ from multiprocessing import Process
 
 # Import third party libs
 import zmq
+import yaml
 
 # Import salt libs
 import salt.payload
@@ -32,6 +34,13 @@ import salt.state
 import salt.utils
 from salt._compat import string_types
 log = logging.getLogger(__name__)
+
+# The SUB_EVENT set is for functions that require events fired based on
+# component executions, like the state system
+SUB_EVENT = set([
+            'state.highstate',
+            'state.sls',
+            ])
 
 
 class SaltEvent(object):
@@ -128,15 +137,18 @@ class SaltEvent(object):
         '''
         Get a single publication
         '''
+        end_time = time.time() + wait
         wait = wait * 1000
 
         self.subscribe(tag)
         while True:
+            if time.time() >= end_time:
+                return None
             socks = dict(self.poller.poll(wait))
             if self.sub in socks and socks[self.sub] == zmq.POLLIN:
                 raw = self.sub.recv()
                 # Double check the tag
-                if tag != raw[:20].rstrip('|'):
+                if not raw[:20].rstrip('|').startswith(tag):
                     continue
                 data = self.serial.loads(raw[20:])
                 if full:
@@ -188,6 +200,26 @@ class SaltEvent(object):
             self.poller.unregister(socket)
         if self.context.closed is False:
             self.context.term()
+
+    def fire_ret_load(self, load):
+        '''
+        Fire events based on information in the return load
+        '''
+        if load.get('retcode') and load.get('fun'):
+            # Minion fired a bad retcode, fire an event
+            if load['fun'] in SUB_EVENT:
+                try:
+                    for tag, data in load.get('return', {}).items():
+                        tag = tag.split('_|-')
+                        if data.get('result') is False:
+                            self.fire_event(
+                                    data,
+                                    '{0}.{1}'.format(tag[0], tag[-1])
+                                    )
+                except Exception:
+                    pass
+            else:
+                self.fire_event(load, load['fun'])
 
     def __del__(self):
         self.destroy()
@@ -292,7 +324,6 @@ class Reactor(multiprocessing.Process, salt.state.Compiler):
     def __init__(self, opts):
         multiprocessing.Process.__init__(self)
         salt.state.Compiler.__init__(self, opts)
-        self.event = SaltEvent('master', self.opts['sock_dir'])
         self.wrap = ReactWrap(self.opts)
 
     def render_reaction(self, glob_ref, tag, data):
@@ -315,7 +346,25 @@ class Reactor(multiprocessing.Process, salt.state.Compiler):
         '''
         log.debug('Gathering rections for tag {0}'.format(tag))
         reactors = []
-        for ropt in self.opts['reactor']:
+        if isinstance(self.opts['reactor'], basestring):
+            try:
+                with open(self.opts['reactor']) as fp_:
+                    react_map = yaml.safe_load(fp_.read())
+            except (OSError, IOError):
+                log.error(
+                    'Failed to read reactor map: "{0}"'.format(
+                        self.opts['reactor']
+                        )
+                    )
+            except Exception:
+                log.error(
+                    'Failed to parse yaml in reactor map: "{0}"'.format(
+                        self.opts['reactor']
+                        )
+                    )
+        else:
+            react_map = self.opts['reactor']
+        for ropt in react_map:
             if not isinstance(ropt, dict):
                 continue
             if not len(ropt) == 1:
@@ -356,6 +405,7 @@ class Reactor(multiprocessing.Process, salt.state.Compiler):
         '''
         Enter into the server loop
         '''
+        self.event = SaltEvent('master', self.opts['sock_dir'])
         for data in self.event.iter_events(full=True):
             reactors = self.list_reactors(data['tag'])
             if not reactors:
@@ -403,7 +453,7 @@ class ReactWrap(object):
         '''
         kwargs['fun'] = fun
         wheel = salt.wheel.Wheel(self.opts)
-        return wheel.master_call(**kwargs)
+        return wheel.call_func(**kwargs)
 
 
 class StateFire(object):
