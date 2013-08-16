@@ -15,6 +15,7 @@ import salt.wheel
 def __virtual__():
     return 'doc'
 
+
 def runner():
     '''
     Return all inline documetation for runner modules
@@ -23,6 +24,7 @@ def runner():
     ret = client.get_docs()
     salt.output.display_output(ret, '', __opts__)
     return ret
+
 
 def wheel():
     '''
@@ -33,6 +35,7 @@ def wheel():
     salt.output.display_output(ret, '', __opts__)
     return ret
 
+
 def execution():
     '''
     Collect all the sys.doc output from each minion and return the aggregate
@@ -41,7 +44,7 @@ def execution():
 
     docs = {}
     for ret in client.cmd_iter('*', 'sys.doc', timeout=__opts__['timeout']):
-        for k,v in ret.items():
+        for v in ret.values():
             docs.update(v)
 
     i = itertools.chain.from_iterable([i.items() for i in docs.values()])
@@ -49,6 +52,7 @@ def execution():
 
     salt.output.display_output(ret, '', __opts__)
     return ret
+
 
 # Still need to modify some of the backend for auth checks to make this work
 def __list_functions(user=None):

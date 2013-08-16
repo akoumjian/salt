@@ -143,7 +143,7 @@ def _check_ruby(ret, ruby, runas=None):
     '''
     match_version = True
     match_micro_version = False
-    micro_version_regex = re.compile('-([0-9]{4}\.[0-9]{2}|p[0-9]+)$')
+    micro_version_regex = re.compile(r'-([0-9]{4}\.[0-9]{2}|p[0-9]+)$')
     if micro_version_regex.search(ruby):
         match_micro_version = True
     if re.search('^[a-z]+$', ruby):
@@ -184,7 +184,7 @@ def installed(name, default=False, runas=None):
         return ret
 
     ret = _check_rvm(ret, runas)
-    if ret['result'] == False:
+    if ret['result'] is False:
         if not __salt__['rvm.install'](runas=runas):
             ret['comment'] = 'RVM failed to install.'
             return ret
@@ -203,7 +203,7 @@ def gemset_present(name, ruby='default', runas=None):
     ruby : default
         The ruby version this gemset belongs to.
     runas : None
-        The use user to run rvm as.
+        The user to run rvm as.
     '''
     ret = {'name': name, 'result': None, 'comment': '', 'changes': {}}
 

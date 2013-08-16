@@ -8,8 +8,11 @@ import glob
 import re
 
 # Import salt libs
-import salt.utils
 from .systemd import _sd_booted
+
+__func_alias__ = {
+    'reload_': 'reload'
+}
 
 
 def __virtual__():
@@ -32,7 +35,9 @@ def get_enabled():
     '''
     Return a list of service that are enabled on boot
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.get_enabled
     '''
@@ -40,7 +45,7 @@ def get_enabled():
     ret = set()
     lines = glob.glob('{0}*'.format(prefix))
     for line in lines:
-        ret.add(re.split(prefix + '\d+', line)[1])
+        ret.add(re.split(prefix + r'\d+', line)[1])
     return sorted(ret)
 
 
@@ -48,7 +53,9 @@ def get_disabled():
     '''
     Return a set of services that are installed but disabled
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.get_disabled
     '''
@@ -59,7 +66,9 @@ def get_all():
     '''
     Return all available boot services
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.get_all
     '''
@@ -77,7 +86,9 @@ def start(name):
     '''
     Start the specified service
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.start <service name>
     '''
@@ -89,7 +100,9 @@ def stop(name):
     '''
     Stop the specified service
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.stop <service name>
     '''
@@ -101,7 +114,9 @@ def restart(name, **kwargs):
     '''
     Restart the named service
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.restart <service name>
     '''
@@ -109,11 +124,13 @@ def restart(name, **kwargs):
     return not __salt__['cmd.retcode'](cmd)
 
 
-def reload(name):
+def reload_(name):
     '''
     Reload the named service
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.reload <service name>
     '''
@@ -125,7 +142,9 @@ def force_reload(name):
     '''
     Force-reload the named service
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.force_reload <service name>
     '''
@@ -138,7 +157,9 @@ def status(name, sig=None):
     Return the status for a service, pass a signature to use to find
     the service via ps
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.status <service name>
     '''
@@ -152,7 +173,9 @@ def enable(name, **kwargs):
     '''
     Enable the named service to start at boot
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.enable <service name>
     '''
@@ -167,7 +190,9 @@ def disable(name, **kwargs):
     '''
     Disable the named service to start at boot
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.disable <service name>
     '''
@@ -177,9 +202,11 @@ def disable(name, **kwargs):
 
 def enabled(name):
     '''
-    Return True if the named servioce is enabled, false otherwise
+    Return True if the named service is enabled, false otherwise
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.enabled <service name>
     '''
@@ -188,9 +215,11 @@ def enabled(name):
 
 def disabled(name):
     '''
-    Return True if the named servioce is enabled, false otherwise
+    Return True if the named service is enabled, false otherwise
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' service.disabled <service name>
     '''

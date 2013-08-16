@@ -10,12 +10,11 @@ call data structure and is present in many modules, this argument will need
 to be replaced in the sls data with the arguments m_name and m_fun.
 '''
 # Import python libs
-
 import datetime
 
 # Import salt libs
-import salt.state
 import salt.loader
+import salt.utils
 
 
 def wait(name, **kwargs):
@@ -27,6 +26,10 @@ def wait(name, **kwargs):
 
     ``**kwargs``
         Pass any arguments needed to execute the function
+
+    Note that this function actually does nothing -- however, if the `watch`
+    is satisfied, then `mod_watch` (defined at the bottom of this file) will be
+    run.  In this case, `mod_watch` is an alias for `run()`.
     '''
     return {'name': name,
             'changes': {},
@@ -51,7 +54,7 @@ def run(name, **kwargs):
            'changes': {},
            'comment': '',
            'result': None}
-    if not name in __salt__:
+    if name not in __salt__:
         ret['comment'] = 'Module function {0} is not available'.format(name)
         ret['result'] = False
         return ret
@@ -60,7 +63,7 @@ def run(name, **kwargs):
         ret['comment'] = 'Module function {0} is set to execute'.format(name)
         return ret
 
-    aspec = salt.state._getargs(__salt__[name])
+    aspec = salt.utils.get_function_argspec(__salt__[name])
 
     args = []
     defaults = {}
@@ -71,15 +74,8 @@ def run(name, **kwargs):
         arglen = len(aspec[0])
     if isinstance(aspec[3], tuple):
         deflen = len(aspec[3])
-    if aspec[2]:
-        # This state accepts kwargs
-        for key in kwargs:
-            # Passing kwargs the conflict with args == stack trace
-            if key in aspec[0]:
-                continue
-            defaults[key] = kwargs[key]
     # Match up the defaults with the respective args
-    for ind in range(arglen - 1, 0, -1):
+    for ind in range(arglen - 1, -1, -1):
         minus = arglen - ind
         if deflen - minus > -1:
             defaults[aspec[0][ind]] = aspec[3][-minus]
@@ -101,11 +97,11 @@ def run(name, **kwargs):
             rarg = 'm_fun'
         else:
             rarg = arg
-        if rarg not in kwargs and rarg not in defaults:
+        if rarg not in kwargs and arg not in defaults:
             missing.add(rarg)
             continue
-        if rarg in defaults:
-            args.append(defaults[rarg])
+        if arg in defaults:
+            args.append(defaults[arg])
         else:
             args.append(kwargs.pop(rarg))
     if missing:
@@ -116,9 +112,30 @@ def run(name, **kwargs):
         ret['result'] = False
         return ret
 
+    if aspec[1] and aspec[1] in kwargs:
+        varargs = kwargs.pop(aspec[1])
+
+        if not isinstance(varargs, list):
+            msg = "'{0}' must be a list."
+            ret['comment'] = msg.format(aspec[1])
+            ret['result'] = False
+            return ret
+
+        args.extend(varargs)
+
+    nkwargs = {}
+    if aspec[2] and aspec[2] in kwargs:
+        nkwargs = kwargs.pop(aspec[2])
+
+        if not isinstance(nkwargs, dict):
+            msg = "'{0}' must be a dict."
+            ret['comment'] = msg.format(aspec[2])
+            ret['result'] = False
+            return ret
+
     try:
         if aspec[2]:
-            mret = __salt__[name](*args, **kwargs)
+            mret = __salt__[name](*args, **nkwargs)
         else:
             mret = __salt__[name](*args)
     except Exception:
@@ -139,6 +156,8 @@ def run(name, **kwargs):
             returners[kwargs['returner']](ret_ret)
     ret['comment'] = 'Module function {0} executed'.format(name)
     ret['result'] = True
+    if ret['changes'].get('retcode', 0) != 0:
+        ret['result'] = False
     return ret
 
-mod_watch = run  # pylint: disable-msg=C0103
+mod_watch = run  # pylint: disable=C0103

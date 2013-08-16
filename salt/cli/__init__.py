@@ -15,6 +15,7 @@ import salt.output
 import salt.runner
 import salt.auth
 import salt.key
+import salt.ssh
 
 from salt.utils import parsers
 from salt.utils.verify import verify_env, verify_files
@@ -35,6 +36,19 @@ class SaltCMD(parsers.SaltCMDOptionParser):
         Execute the salt command line
         '''
         self.parse_args()
+
+        if self.config['verify_env']:
+            if (not self.config['log_file'].startswith('tcp://') or
+                    not self.config['log_file'].startswith('udp://') or
+                    not self.config['log_file'].startswith('file://')):
+                # Logfile is not using Syslog, verify
+                verify_files(
+                    [self.config['log_file']],
+                    self.config['user']
+                )
+
+        # Setup file logging!
+        self.setup_logfile_logger()
 
         try:
             local = salt.client.LocalClient(self.get_config_file_path())
@@ -92,6 +106,12 @@ class SaltCMD(parsers.SaltCMDOptionParser):
             try:
                 # local will be None when there was an error
                 if local:
+                    if self.options.subset:
+                        cmd_func = local.cmd_subset
+                        kwargs['sub'] = self.options.subset
+                        kwargs['cli'] = True
+                    else:
+                        cmd_func = local.cmd_cli
                     if self.options.static:
                         if self.options.verbose:
                             kwargs['verbose'] = True
@@ -108,7 +128,7 @@ class SaltCMD(parsers.SaltCMDOptionParser):
                     else:
                         if self.options.verbose:
                             kwargs['verbose'] = True
-                        for full_ret in local.cmd_cli(**kwargs):
+                        for full_ret in cmd_func(**kwargs):
                             ret, out = self._format_ret(full_ret)
                             self._output_ret(ret, out)
             except (SaltInvocationError, EauthAuthenticationError) as exc:
@@ -126,6 +146,8 @@ class SaltCMD(parsers.SaltCMDOptionParser):
         else:
             # Determine the proper output method and run it
             salt.output.display_output(ret, out, self.config)
+        if not ret:
+            sys.exit(2)
 
     def _format_ret(self, full_ret):
         '''
@@ -168,6 +190,20 @@ class SaltCP(parsers.SaltCPOptionParser):
         Execute salt-cp
         '''
         self.parse_args()
+
+        if self.config['verify_env']:
+            if (not self.config['log_file'].startswith('tcp://') or
+                    not self.config['log_file'].startswith('udp://') or
+                    not self.config['log_file'].startswith('file://')):
+                # Logfile is not using Syslog, verify
+                verify_files(
+                    [self.config['log_file']],
+                    self.config['user']
+                )
+
+        # Setup file logging!
+        self.setup_logfile_logger()
+
         cp_ = salt.cli.cp.SaltCP(self.config)
         cp_.run()
 
@@ -191,7 +227,6 @@ class SaltKey(parsers.SaltKeyOptionParser):
                     os.path.join(self.config['pki_dir'], 'minions'),
                     os.path.join(self.config['pki_dir'], 'minions_pre'),
                     os.path.join(self.config['pki_dir'], 'minions_rejected'),
-                    os.path.dirname(self.config['key_logfile'])
                 ])
 
             verify_env(
@@ -200,6 +235,14 @@ class SaltKey(parsers.SaltKeyOptionParser):
                 permissive=self.config['permissive_pki_access'],
                 pki_dir=self.config['pki_dir'],
             )
+            if (not self.config['key_logfile'].startswith('tcp://') or
+                    not self.config['key_logfile'].startswith('udp://') or
+                    not self.config['key_logfile'].startswith('file://')):
+                # Logfile is not using Syslog, verify
+                verify_files(
+                    [self.config['key_logfile']],
+                    self.config['user']
+                )
 
         self.setup_logfile_logger()
 
@@ -228,8 +271,8 @@ class SaltCall(parsers.SaltCallOptionParser):
                 pki_dir=self.config['pki_dir'],
             )
             if (not self.config['log_file'].startswith('tcp://') or
-                not self.config['log_file'].startswith('udp://') or
-                not self.config['log_file'].startswith('file://')):
+                    not self.config['log_file'].startswith('udp://') or
+                    not self.config['log_file'].startswith('file://')):
                 # Logfile is not using Syslog, verify
                 verify_files(
                     [self.config['log_file']],
@@ -238,6 +281,8 @@ class SaltCall(parsers.SaltCallOptionParser):
 
         if self.options.local:
             self.config['file_client'] = 'local'
+        if self.options.master:
+            self.config['master'] = self.options.master
 
         # Setup file logging!
         self.setup_logfile_logger()
@@ -256,20 +301,55 @@ class SaltCall(parsers.SaltCallOptionParser):
 
 
 class SaltRun(parsers.SaltRunOptionParser):
-
+    '''
+    Used to execute Salt runners
+    '''
     def run(self):
         '''
         Execute salt-run
         '''
         self.parse_args()
 
+        if self.config['verify_env']:
+            verify_env([
+                    self.config['pki_dir'],
+                    self.config['cachedir'],
+                ],
+                self.config['user'],
+                permissive=self.config['permissive_pki_access'],
+                pki_dir=self.config['pki_dir'],
+            )
+            if (not self.config['log_file'].startswith('tcp://') or
+                not self.config['log_file'].startswith('udp://') or
+                not self.config['log_file'].startswith('file://')):
+                # Logfile is not using Syslog, verify
+                verify_files(
+                    [self.config['log_file']],
+                    self.config['user']
+                )
+
+        # Setup file logging!
+        self.setup_logfile_logger()
+
         runner = salt.runner.Runner(self.config)
         if self.options.doc:
             runner._print_docs()
-        else:
-            # Run this here so SystemExit isn't raised anywhere else when
-            # someone tries to use the runners via the python api
-            try:
-                runner.run()
-            except SaltClientError as exc:
-                raise SystemExit(str(exc))
+            self.exit(0)
+
+        # Run this here so SystemExit isn't raised anywhere else when
+        # someone tries to use the runners via the python API
+        try:
+            runner.run()
+        except SaltClientError as exc:
+            raise SystemExit(str(exc))
+
+
+class SaltSSH(parsers.SaltSSHOptionParser):
+    '''
+    Used to Execute the salt ssh routine
+    '''
+    def run(self):
+        self.parse_args()
+
+        ssh = salt.ssh.SSH(self.config)
+        ssh.run()

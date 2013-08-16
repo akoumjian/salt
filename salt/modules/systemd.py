@@ -2,11 +2,15 @@
 Provide the service module for systemd
 '''
 # Import python libs
+import logging
 import os
 import re
 
-# Import salt libs
-import salt.utils
+log = logging.getLogger(__name__)
+
+__func_alias__ = {
+    'reload_': 'reload'
+}
 
 LOCAL_CONFIG_PATH = '/etc/systemd/system'
 VALID_UNIT_TYPES = ['service', 'socket', 'device', 'mount', 'automount',
@@ -31,15 +35,10 @@ def _sd_booted():
         try:
             # This check does the same as sd_booted() from libsystemd-daemon:
             # http://www.freedesktop.org/software/systemd/man/sd_booted.html
-            cgroup_fs = os.stat('/sys/fs/cgroup')
-            cgroup_systemd = os.stat('/sys/fs/cgroup/systemd')
+            if os.stat('/run/systemd/system'):
+                __context__['systemd.sd_booted'] = True
         except OSError:
             __context__['systemd.sd_booted'] = False
-        else:
-            if cgroup_fs.st_dev != cgroup_systemd.st_dev:
-                __context__['systemd.sd_booted'] = True
-            else:
-                __context__['systemd.sd_booted'] = False
 
     return __context__['systemd.sd_booted']
 
@@ -74,9 +73,9 @@ def _get_all_unit_files():
     Get all unit files and their state. Unit files ending in .service
     are normalized so that they can be referenced without a type suffix.
     '''
-    rexp = re.compile('(?m)^(?P<name>.+)\.(?P<type>' +
+    rexp = re.compile(r'(?m)^(?P<name>.+)\.(?P<type>' +
                       '|'.join(VALID_UNIT_TYPES) +
-                      ')\s+(?P<state>.+)$')
+                      r')\s+(?P<state>.+)$')
 
     out = __salt__['cmd.run_stdout'](
         'systemctl --full list-unit-files | col -b'
@@ -216,7 +215,7 @@ def restart(name):
     return not __salt__['cmd.retcode'](_systemctl_cmd('restart', name))
 
 
-def reload(name):
+def reload_(name):
     '''
     Reload the specified service with systemd
 

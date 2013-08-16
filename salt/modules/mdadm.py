@@ -14,18 +14,24 @@ from salt.exceptions import CommandExecutionError
 log = logging.getLogger(__name__)
 
 
+# Define a function alias in order not to shadow built-in's
+__func_alias__ = {
+    'list_': 'list'
+}
+
+
 def __virtual__():
     '''
     mdadm provides raid functions for Linux
     '''
-    if not __grains__['kernel'] == 'Linux':
+    if __grains__['kernel'] != 'Linux':
         return False
     if not salt.utils.which('mdadm'):
         return False
     return 'raid'
 
 
-def list():
+def list_():
     '''
     List the RAID devices.
 
@@ -91,6 +97,34 @@ def detail(device='/dev/md0'):
     return ret
 
 
+def destroy(device):
+    '''
+    Destroy a RAID device.
+
+    WARNING This will zero the superblock of all members of the RAID array..
+
+    CLI Example::
+
+        salt '*' raid.destroy /dev/md0
+    '''
+    try:
+        details = detail(device)
+    except CommandExecutionError:
+        return False
+
+    stop_cmd = 'mdadm --stop {0}'.format(device)
+    zero_cmd = 'mdadm --zero-superblock {0}'
+
+    if __salt__['cmd.retcode'](stop_cmd):
+        for number in details['members']:
+            __salt__['cmd.retcode'](zero_cmd.format(number['device']))
+
+    if __salt__['raid.list']().get(device) is None:
+        return True
+    else:
+        return False
+
+
 def create(*args):
     '''
     Create a RAID device.
@@ -141,11 +175,13 @@ def create(*args):
                 arguments['new_array'] = arg
             else:
                 arguments['disks_to_array'].append(arg)
-        elif arg.find('=') != -1:
+        elif '=' in arg:
             opt, val = arg.split('=')
             arguments['opt_val'][opt] = val
         elif str(arg) in ['readonly', 'run', 'force']:
             arguments['opt_raw'].append(arg)
+        elif str(arg) in ['missing']:
+            arguments['disks_to_array'].append(arg)
         else:
             msg = "Invalid argument - {0} !"
             raise CommandExecutionError(msg.format(arg))

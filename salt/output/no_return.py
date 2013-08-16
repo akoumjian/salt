@@ -6,13 +6,14 @@ import salt.utils
 
 class NestDisplay(object):
     '''
+    Create generator for nested output
     '''
     def __init__(self):
         self.colors = salt.utils.get_colors(__opts__.get('color'))
 
     def display(self, ret, indent, prefix, out):
         '''
-        Recursively interate down through data structures to determine output
+        Recursively iterate down through data structures to determine output
         '''
         if isinstance(ret, str):
             lines = ret.split('\n')

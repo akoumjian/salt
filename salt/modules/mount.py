@@ -4,6 +4,7 @@ Salt module to manage unix mounts and the fstab file
 
 # Import python libs
 import os
+import re
 import logging
 
 # Import salt libs
@@ -11,7 +12,6 @@ import salt.utils
 from salt._compat import string_types
 from salt.utils import which as _which
 from salt.exceptions import CommandNotFoundError, CommandExecutionError
-
 
 # Set up logger
 log = logging.getLogger(__name__)
@@ -54,6 +54,15 @@ def _active_mounts(ret):
     return ret
 
 
+def _active_mounts_freebsd(ret):
+    for line in __salt__['cmd.run_stdout']('mount -p').split('\n'):
+        comps = re.sub(r"\s+", " ", line).split()
+        ret[comps[1]] = {'device': comps[0],
+                         'fstype': comps[2],
+                         'opts': comps[3].split(',')}
+    return ret
+
+
 def active():
     '''
     List the active mounts.
@@ -63,10 +72,13 @@ def active():
         salt '*' mount.active
     '''
     ret = {}
-    try:
-        _active_mountinfo(ret)
-    except CommandExecutionError:
-        _active_mounts(ret)
+    if __grains__['os'] in ('FreeBSD'):
+        _active_mounts_freebsd(ret)
+    else:
+        try:
+            _active_mountinfo(ret)
+        except CommandExecutionError:
+            _active_mounts(ret)
     return ret
 
 
@@ -90,7 +102,7 @@ def fstab(config='/etc/fstab'):
                 # Blank line
                 continue
             comps = line.split()
-            if not len(comps) == 6:
+            if len(comps) != 6:
                 # Invalid entry
                 continue
             ret[comps[1]] = {'device': comps[0],
@@ -126,7 +138,7 @@ def rm_fstab(name, config='/etc/fstab'):
                     lines.append(line)
                     continue
                 comps = line.split()
-                if not len(comps) == 6:
+                if len(comps) != 6:
                     # Invalid entry
                     lines.append(line)
                     continue
@@ -155,7 +167,8 @@ def set_fstab(
         dump=0,
         pass_num=0,
         config='/etc/fstab',
-        ):
+        test=False,
+        **kwargs):
     '''
     Verify that this mount is represented in the fstab, change the mount
     to match the data passed, or add the mount if it is not present.
@@ -186,7 +199,7 @@ def set_fstab(
                     lines.append(line)
                     continue
                 comps = line.split()
-                if not len(comps) == 6:
+                if len(comps) != 6:
                     # Invalid entry
                     lines.append(line)
                     continue
@@ -211,7 +224,7 @@ def set_fstab(
                         comps[5] = str(pass_num)
                     if change:
                         log.debug(
-                            'fstab entry for mount point {0} is being '
+                            'fstab entry for mount point {0} needs to be '
                             'updated'.format(name)
                         )
                         newline = (
@@ -223,43 +236,46 @@ def set_fstab(
                 else:
                     lines.append(line)
     except (IOError, OSError) as exc:
-        msg = 'Couldn\'t write to {0}: {1}'
+        msg = 'Couldn\'t read from {0}: {1}'
         raise CommandExecutionError(msg.format(config, str(exc)))
 
     if change:
-        try:
-            with salt.utils.fopen(config, 'w+') as ofile:
-                # The line was changed, commit it!
-                ofile.writelines(lines)
-        except (IOError, OSError):
-            msg = 'File not writable {0}'
-            raise CommandExecutionError(msg.format(config))
+        if not salt.utils.test_mode(test=test, **kwargs):
+            try:
+                with salt.utils.fopen(config, 'w+') as ofile:
+                    # The line was changed, commit it!
+                    ofile.writelines(lines)
+            except (IOError, OSError):
+                msg = 'File not writable {0}'
+                raise CommandExecutionError(msg.format(config))
 
         return 'change'
 
-    if not change and not present:
-        # The entry is new, add it to the end of the fstab
-        newline = '{0}\t\t{1}\t{2}\t{3}\t{4} {5}\n'.format(
-                device,
-                name,
-                fstype,
-                opts,
-                dump,
-                pass_num)
-        lines.append(newline)
-        try:
-            with salt.utils.fopen(config, 'w+') as ofile:
-                # The line was changed, commit it!
-                ofile.writelines(lines)
-        except (IOError, OSError):
-            raise CommandExecutionError(
-                'File not writable {0}'.format(
-                    config
-                )
-            )
-    if present and not change:
-        # The right entry is already here
-        return 'present'
+    if not change:
+        if present:
+            # The right entry is already here
+            return 'present'
+        else:
+            if not salt.utils.test_mode(test=test, **kwargs):
+                # The entry is new, add it to the end of the fstab
+                newline = '{0}\t\t{1}\t{2}\t{3}\t{4} {5}\n'.format(
+                        device,
+                        name,
+                        fstype,
+                        opts,
+                        dump,
+                        pass_num)
+                lines.append(newline)
+                try:
+                    with salt.utils.fopen(config, 'w+') as ofile:
+                        # The line was changed, commit it!
+                        ofile.writelines(lines)
+                except (IOError, OSError):
+                    raise CommandExecutionError(
+                        'File not writable {0}'.format(
+                            config
+                        )
+                    )
     return 'new'
 
 
@@ -276,9 +292,10 @@ def mount(name, device, mkmnt=False, fstype='', opts='defaults'):
     if not os.path.exists(name) and mkmnt:
         os.makedirs(name)
     lopts = ','.join(opts)
-    cmd = 'mount -o {0} {1} {2} '.format(lopts, device, name)
+    args = '-o {0}'.format(lopts)
     if fstype:
-        cmd += ' -t {0}'.format(fstype)
+        args += ' -t {0}'.format(fstype)
+    cmd = 'mount {0} {1} {2} '.format(args, device, name)
     out = __salt__['cmd.run_all'](cmd)
     if out['retcode']:
         return out['stderr']
@@ -302,9 +319,10 @@ def remount(name, device, mkmnt=False, fstype='', opts='defaults'):
         if 'remount' not in opts:
             opts.append('remount')
         lopts = ','.join(opts)
-        cmd = 'mount -o {0} {1} {2} '.format(lopts, device, name)
+        args = '-o {0}'.format(lopts)
         if fstype:
-            cmd += ' -t {0}'.format(fstype)
+            args += ' -t {0}'.format(fstype)
+        cmd = 'mount {0} {1} {2} '.format(args, device, name)
         out = __salt__['cmd.run_all'](cmd)
         if out['retcode']:
             return out['stderr']
@@ -350,3 +368,69 @@ def is_fuse_exec(cmd):
 
     out = __salt__['cmd.run']('ldd {0}'.format(cmd_path))
     return 'libfuse' in out
+
+
+def swaps():
+    '''
+    Return a dict containing information on active swap
+
+    CLI Example::
+
+        salt '*' mount.swaps
+    '''
+    ret = {}
+    with salt.utils.fopen('/proc/swaps') as fp_:
+        for line in fp_:
+            if line.startswith('Filename'):
+                continue
+            comps = line.split()
+            ret[comps[0]] = {
+                    'type': comps[1],
+                    'size': comps[2],
+                    'used': comps[3],
+                    'priority': comps[4]}
+    return ret
+
+
+def swapon(name, priority=None):
+    '''
+    Activate a swap disk
+
+    CLI Example::
+
+        salt '*' mount.swapon /root/swapfile
+    '''
+    ret = {}
+    on_ = swaps()
+    if name in on_:
+        ret['stats'] = on_[name]
+        ret['new'] = False
+        return ret
+    cmd = 'swapon {0}'.format(name)
+    if priority:
+        cmd += ' -p {0}'.format(priority)
+    __salt__['cmd.run'](cmd)
+    on_ = swaps()
+    if name in on_:
+        ret['stats'] = on_[name]
+        ret['new'] = True
+        return ret
+    return ret
+
+
+def swapoff(name):
+    '''
+    Deactivate a named swap mount
+
+    CLI Example::
+
+        salt '*' mount.swapoff /root/swapfile
+    '''
+    on_ = swaps()
+    if name in on_:
+        __salt__['cmd.run']('swapoff {0}'.format(name))
+        on_ = swaps()
+        if name in on_:
+            return False
+        return True
+    return None

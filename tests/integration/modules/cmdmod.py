@@ -1,8 +1,15 @@
+# Import python libs
 import os
-import integration
+import sys
 import tempfile
 
-from saltunittest import skipIf
+# Import Salt Testing libs
+from salttesting import skipIf
+from salttesting.helpers import ensure_in_syspath
+ensure_in_syspath('../../')
+
+# Import salt libs
+import integration
 
 try:
     from mock import Mock, patch
@@ -12,7 +19,7 @@ except ImportError:
     patch = lambda x: lambda y: None
 
 
-@skipIf(has_mock is False, "mock python module is unavailable")
+@skipIf(has_mock is False, 'mock python module is unavailable')
 class CMDModuleTest(integration.ModuleCase):
     '''
     Validate the cmd module
@@ -21,7 +28,11 @@ class CMDModuleTest(integration.ModuleCase):
         '''
         cmd.run
         '''
-        shell = os.environ['SHELL']
+        shell = os.environ.get('SHELL')
+        if shell is None:
+            # Failed to get the SHELL var, don't run
+            self.skipTest('Unable to get the SHELL environment variable')
+
         self.assertTrue(self.run_function('cmd.run', ['echo $SHELL']))
         self.assertEqual(
             self.run_function('cmd.run',
@@ -41,7 +52,7 @@ class CMDModuleTest(integration.ModuleCase):
         loads_mock, popen_mock, getpwnam_mock = mocks
 
         popen_mock.return_value = Mock(
-            communicate=lambda *args, **kwags: ['hi', None],
+            communicate=lambda *args, **kwags: ['{}', None],
             pid=lambda: 1,
             retcode=0
         )
@@ -51,18 +62,23 @@ class CMDModuleTest(integration.ModuleCase):
         from salt.modules import cmdmod
 
         cmdmod.__grains__ = {'os': 'darwin'}
+        if sys.platform.startswith('freebsd'):
+            shell = '/bin/sh'
+        else:
+            shell = '/bin/bash'
+
         try:
             cmdmod._run('ls',
                         cwd=tempfile.gettempdir(),
                         runas='foobar',
-                        shell='/bin/bash')
+                        shell=shell)
 
             environment2 = os.environ.copy()
 
             self.assertEquals(environment, environment2)
 
             getpwnam_mock.assert_called_with('foobar')
-            loads_mock.assert_called_with('hi')
+            loads_mock.assert_called_with('{}')
         finally:
             delattr(cmdmod, '__grains__')
 
@@ -78,8 +94,15 @@ class CMDModuleTest(integration.ModuleCase):
         '''
         cmd.run_stderr
         '''
+        if sys.platform.startswith('freebsd'):
+            shell = '/bin/sh'
+        else:
+            shell = '/bin/bash'
+
         self.assertEqual(self.run_function('cmd.run_stderr',
-                                           ['echo "cheese" 1>&2']).rstrip(),
+                                           ['echo "cheese" 1>&2',
+                                            'shell={0}'.format(shell)]
+                                           ).rstrip(),
                          'cheese')
 
     def test_run_all(self):
@@ -87,7 +110,14 @@ class CMDModuleTest(integration.ModuleCase):
         cmd.run_all
         '''
         from salt._compat import string_types
-        ret = self.run_function('cmd.run_all', ['echo "cheese" 1>&2'])
+
+        if sys.platform.startswith('freebsd'):
+            shell = '/bin/sh'
+        else:
+            shell = '/bin/bash'
+
+        ret = self.run_function('cmd.run_all', ['echo "cheese" 1>&2',
+                                                'shell={0}'.format(shell)])
         self.assertTrue('pid' in ret)
         self.assertTrue('retcode' in ret)
         self.assertTrue('stdout' in ret)
@@ -102,8 +132,8 @@ class CMDModuleTest(integration.ModuleCase):
         '''
         cmd.retcode
         '''
-        self.assertEqual(self.run_function('cmd.retcode', ['true']), 0)
-        self.assertEqual(self.run_function('cmd.retcode', ['false']), 1)
+        self.assertEqual(self.run_function('cmd.retcode', ['exit 0']), 0)
+        self.assertEqual(self.run_function('cmd.retcode', ['exit 1']), 1)
 
     def test_which(self):
         '''
@@ -141,6 +171,7 @@ sys.stdout.write('cheese')
         result = self.run_function('cmd.run_stdout', [cmd]).strip()
         self.assertEqual(result, expected_result)
 
+    @skipIf(os.geteuid() != 0, 'you must be root to run this test')
     def test_quotes_runas(self):
         '''
         cmd.run with quoted command
@@ -158,6 +189,22 @@ sys.stdout.write('cheese')
         result = self.run_function('cmd.run_stdout', [cmd],
                                    runas=runas).strip()
         self.assertEqual(result, expected_result)
+
+    def test_timeout(self):
+        '''
+        cmd.run trigger timeout
+        '''
+        self.assertTrue(
+            'Timed out' in self.run_function(
+                'cmd.run', ['sleep 2 && echo hello', 'timeout=1']))
+
+    def test_timeout_success(self):
+        '''
+        cmd.run sufficient timeout to succeed
+        '''
+        self.assertTrue(
+            'hello' == self.run_function(
+                'cmd.run', ['sleep 1 && echo hello', 'timeout=2']))
 
 
 if __name__ == '__main__':

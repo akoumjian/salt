@@ -16,6 +16,12 @@ Module to provide MySQL compatibility to salt.
     You can also use a defaults file::
 
         mysql.default_file: '/etc/mysql/debian.cnf'
+
+.. versionchanged:: 0.16.2
+    Connection arguments from the minion config file can be overridden on the
+    CLI by using the arguments defined :doc:`here
+    </ref/states/all/salt.states.mysql_user>`. Additionally, it is now possible
+    to setup a user with no password.
 '''
 
 # Import python libs
@@ -23,6 +29,9 @@ import time
 import logging
 import re
 import sys
+
+# Import salt libs
+import salt.utils
 
 # Import third party libs
 try:
@@ -48,34 +57,40 @@ def __virtual__():
     return False
 
 
-def __check_table(name, table):
-    dbc = _connect()
+def __check_table(name, table, **connection_args):
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return {}
     cur = dbc.cursor(MySQLdb.cursors.DictCursor)
-    query = 'CHECK TABLE `{0}`.`{1}`'.format(name, table)
-    log.debug('Doing query: {0}'.format(query))
-    cur.execute(query)
+    qry = 'CHECK TABLE `{0}`.`{1}`'.format(name, table)
+    log.debug('Doing query: {0}'.format(qry))
+    cur.execute(qry)
     results = cur.fetchall()
     log.debug(results)
     return results
 
 
-def __repair_table(name, table):
-    dbc = _connect()
+def __repair_table(name, table, **connection_args):
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return {}
     cur = dbc.cursor(MySQLdb.cursors.DictCursor)
-    query = 'REPAIR TABLE `{0}`.`{1}`'.format(name, table)
-    log.debug('Doing query: {0}'.format(query))
-    cur.execute(query)
+    qry = 'REPAIR TABLE `{0}`.`{1}`'.format(name, table)
+    log.debug('Doing query: {0}'.format(qry))
+    cur.execute(qry)
     results = cur.fetchall()
     log.debug(results)
     return results
 
 
-def __optimize_table(name, table):
-    dbc = _connect()
+def __optimize_table(name, table, **connection_args):
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return {}
     cur = dbc.cursor(MySQLdb.cursors.DictCursor)
-    query = 'OPTIMIZE TABLE `{0}`.`{1}`'.format(name, table)
-    log.debug('Doing query: {0}'.format(query))
-    cur.execute(query)
+    qry = 'OPTIMIZE TABLE `{0}`.`{1}`'.format(name, table)
+    log.debug('Doing query: {0}'.format(qry))
+    cur.execute(qry)
     results = cur.fetchall()
     log.debug(results)
     return results
@@ -89,35 +104,50 @@ def _connect(**kwargs):
 
     def _connarg(name, key=None):
         '''
-        Add key to connargs, only if name exists in our
-        kwargs or as mysql.<name> in __opts__ or __pillar__
-        Evaluate in said order - kwargs, opts then pillar
+        Add key to connargs, only if name exists in our kwargs or as
+        mysql.<name> in __opts__ or __pillar__ Evaluate in said order - kwargs,
+        opts then pillar. To avoid collision with other functions, kwargs-based
+        connection arguments are prefixed with 'connection_' (i.e.
+        'connection_host', 'connection_user', etc.).
         '''
         if key is None:
             key = name
         if name in kwargs:
             connargs[key] = kwargs[name]
         else:
+            prefix = 'connection_'
+            if name.startswith(prefix):
+                try:
+                    name = name[len(prefix):]
+                except IndexError:
+                    return
             val = __salt__['config.option']('mysql.{0}'.format(name), None)
             if val is not None:
                 connargs[key] = val
 
-    _connarg('host')
-    _connarg('user')
-    _connarg('pass', 'passwd')
-    _connarg('port')
-    _connarg('db')
-    _connarg('conv')
-    _connarg('unix_socket')
-    _connarg('default_file', 'read_default_file')
-    _connarg('default_group', 'read_default_group')
+    _connarg('connection_host', 'host')
+    _connarg('connection_user', 'user')
+    _connarg('connection_pass', 'passwd')
+    _connarg('connection_port', 'port')
+    _connarg('connection_db', 'db')
+    _connarg('connection_conv', 'conv')
+    _connarg('connection_unix_socket', 'unix_socket')
+    _connarg('connection_default_file', 'read_default_file')
+    _connarg('connection_default_group', 'read_default_group')
 
-    dbc = MySQLdb.connect(**connargs)
+    try:
+        dbc = MySQLdb.connect(**connargs)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return None
+
     dbc.autocommit(True)
     return dbc
 
 
-def query(database, query):
+def query(database, query, **connection_args):
     '''
     Run an arbitrary SQL query and return the results or
     the number of affected rows.
@@ -158,13 +188,21 @@ def query(database, query):
     # into Python objects. It leaves them as strings.
     orig_conv = MySQLdb.converters.conversions
     conv_iter = iter(orig_conv)
-    conv = dict(zip(conv_iter,[str,] * len(orig_conv.keys())))
+    conv = dict(zip(conv_iter, [str] * len(orig_conv.keys())))
 
-    ret = {}
-    dbc = _connect(**{'db': database, 'conv': conv})
+    connection_args.update({'connection_db': database, 'connection_conv': conv})
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return {}
     cur = dbc.cursor()
     start = time.time()
-    affected = cur.execute(query)
+    try:
+        affected = cur.execute(query)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return {}
     log.debug('Using db: ' + database + ' to run query: ' + query)
     results = cur.fetchall()
     elapsed = (time.time() - start)
@@ -172,8 +210,16 @@ def query(database, query):
         elapsed_h = str(round(elapsed * 1000, 1)) + 'ms'
     else:
         elapsed_h = str(round(elapsed, 2)) + 's'
+
+    ret = {}
     ret['query time'] = {'human': elapsed_h, 'raw': str(round(elapsed, 5))}
-    if query.upper().strip().startswith("SELECT"):
+    select_keywords = ["SELECT", "SHOW", "DESC"]
+    select_query = False
+    for keyword in select_keywords:
+        if query.upper().strip().startswith(keyword):
+            select_query = True
+            break
+    if select_query:
         ret['rows returned'] = affected
         columns = ()
         for column in cur.description:
@@ -186,7 +232,7 @@ def query(database, query):
         return ret
 
 
-def status():
+def status(**connection_args):
     '''
     Return the status of a MySQL server using the output
     from the ``SHOW STATUS`` query.
@@ -195,17 +241,28 @@ def status():
 
         salt '*' mysql.status
     '''
-    ret = {}
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return {}
     cur = dbc.cursor()
-    cur.execute('SHOW STATUS')
+    qry = 'SHOW STATUS'
+    log.debug('Doing query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return {}
+
+    ret = {}
     for _ in range(cur.rowcount):
         row = cur.fetchone()
         ret[row[0]] = row[1]
     return ret
 
 
-def version():
+def version(**connection_args):
     '''
     Return the version of a MySQL server using the output
     from the ``SELECT VERSION()`` query.
@@ -214,27 +271,52 @@ def version():
 
         salt '*' mysql.version
     '''
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return ''
     cur = dbc.cursor()
-    cur.execute('SELECT VERSION()')
-    row = cur.fetchone()
-    return row
+    qry = 'SELECT VERSION()'
+    log.debug('Doing query: {0}'.format(qry))
+    try:
+        cur.execute('SELECT VERSION()')
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return ''
+
+    try:
+        return cur.fetchone()[0]
+    except IndexError:
+        return ''
 
 
-def slave_lag():
+def slave_lag(**connection_args):
     '''
     Return the number of seconds that a slave SQL server is lagging behind the
     master, if the host is not a slave it will return -1.  If the server is
     configured to be a slave for replication but slave IO is not running then
-    -2 will be returned.
+    -2 will be returned. If there was an error connecting to the database or
+    checking the slave status, -3 will be returned.
 
     CLI Example::
 
         salt '*' mysql.slave_lag
     '''
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return -3
     cur = dbc.cursor(MySQLdb.cursors.DictCursor)
-    cur.execute('show slave status')
+    qry = 'show slave status'
+    log.debug('Doing query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return -3
+
     results = cur.fetchone()
     if cur.rowcount == 0:
         # Server is not a slave if master is not defined.  Return empty tuple
@@ -250,15 +332,15 @@ def slave_lag():
             return -2
 
 
-def free_slave():
+def free_slave(**connection_args):
     '''
     Frees a slave from its master.  This is a WIP, do not use.
 
     CLI Example::
 
-        salt \* mysql.free_slave
+        salt '*' mysql.free_slave
     '''
-    slave_db = _connect()
+    slave_db = _connect(**connection_args)
     slave_cur = slave_db.cursor(MySQLdb.cursors.DictCursor)
     slave_cur.execute("show slave status")
     slave_status = slave_cur.fetchone()
@@ -290,7 +372,7 @@ def free_slave():
 
 
 #Database related actions
-def db_list():
+def db_list(**connection_args):
     '''
     Return a list of databases of a MySQL server using the output
     from the ``SHOW DATABASES`` query.
@@ -299,10 +381,21 @@ def db_list():
 
         salt '*' mysql.db_list
     '''
-    ret = []
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return []
     cur = dbc.cursor()
-    cur.execute('SHOW DATABASES')
+    qry = 'SHOW DATABASES'
+    log.debug('Doing query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return []
+
+    ret = []
     results = cur.fetchall()
     for dbs in results:
         ret.append(dbs[0])
@@ -311,7 +404,7 @@ def db_list():
     return ret
 
 
-def db_tables(name):
+def db_tables(name, **connection_args):
     '''
     Shows the tables in the given MySQL database (if exists)
 
@@ -319,17 +412,25 @@ def db_tables(name):
 
         salt '*' mysql.db_tables 'database'
     '''
-    if not db_exists(name):
+    if not db_exists(name, **connection_args):
         log.info("Database '{0}' does not exist".format(name,))
         return False
 
-    ret = []
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return []
     cur = dbc.cursor()
-    query = 'SHOW TABLES IN {0}'.format(name)
-    log.debug('Doing query: {0}'.format(query))
+    qry = 'SHOW TABLES IN {0}'.format(name)
+    log.debug('Doing query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return []
 
-    cur.execute(query)
+    ret = []
     results = cur.fetchall()
     for table in results:
         ret.append(table[0])
@@ -337,7 +438,7 @@ def db_tables(name):
     return ret
 
 
-def db_exists(name):
+def db_exists(name, **connection_args):
     '''
     Checks if a database exists on the MySQL server.
 
@@ -345,16 +446,24 @@ def db_exists(name):
 
         salt '*' mysql.db_exists 'dbname'
     '''
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
     cur = dbc.cursor()
-    query = 'SHOW DATABASES LIKE \'{0}\''.format(name)
-    log.debug('Doing query: {0}'.format(query))
-    cur.execute(query)
+    qry = 'SHOW DATABASES LIKE \'{0}\''.format(name)
+    log.debug('Doing query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
     cur.fetchall()
     return cur.rowcount == 1
 
 
-def db_create(name):
+def db_create(name, **connection_args):
     '''
     Adds a databases to the MySQL server.
 
@@ -363,22 +472,29 @@ def db_create(name):
         salt '*' mysql.db_create 'dbname'
     '''
     # check if db exists
-    if db_exists(name):
+    if db_exists(name, **connection_args):
         log.info('DB \'{0}\' already exists'.format(name))
         return False
 
-    # db doesnt exist, proceed
-    dbc = _connect()
+    # db doesn't exist, proceed
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
     cur = dbc.cursor()
-    query = 'CREATE DATABASE `{0}`;'.format(name)
-    log.debug('Query: {0}'.format(query))
-    if cur.execute(query):
-        log.info('DB \'{0}\' created'.format(name))
-        return True
+    qry = 'CREATE DATABASE `{0}`;'.format(name)
+    log.debug('Query: {0}'.format(qry))
+    try:
+        if cur.execute(qry):
+            log.info('DB \'{0}\' created'.format(name))
+            return True
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
     return False
 
 
-def db_remove(name):
+def db_remove(name, **connection_args):
     '''
     Removes a databases from the MySQL server.
 
@@ -387,7 +503,7 @@ def db_remove(name):
         salt '*' mysql.db_remove 'dbname'
     '''
     # check if db exists
-    if not db_exists(name):
+    if not db_exists(name, **connection_args):
         log.info('DB \'{0}\' does not exist'.format(name))
         return False
 
@@ -395,14 +511,22 @@ def db_remove(name):
         log.info('DB \'{0}\' may not be removed'.format(name))
         return False
 
-    # db doesnt exist, proceed
-    dbc = _connect()
+    # db doesn't exist, proceed
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
     cur = dbc.cursor()
-    query = 'DROP DATABASE `{0}`;'.format(name)
-    log.debug('Doing query: {0}'.format(query))
-    cur.execute(query)
+    qry = 'DROP DATABASE `{0}`;'.format(name)
+    log.debug('Doing query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
 
-    if not db_exists(name):
+    if not db_exists(name, **connection_args):
         log.info('Database \'{0}\' has been removed'.format(name))
         return True
 
@@ -411,7 +535,7 @@ def db_remove(name):
 
 
 # User related actions
-def user_list():
+def user_list(**connection_args):
     '''
     Return a list of users on a MySQL server
 
@@ -419,40 +543,70 @@ def user_list():
 
         salt '*' mysql.user_list
     '''
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return []
     cur = dbc.cursor(MySQLdb.cursors.DictCursor)
-    cur.execute('SELECT User,Host FROM mysql.user')
+    try:
+        cur.execute('SELECT User,Host FROM mysql.user')
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return []
     results = cur.fetchall()
     log.debug(results)
     return results
 
 
-def user_exists(user, host='localhost', password=None, password_hash=None):
+def user_exists(user,
+                host='localhost',
+                password=None,
+                password_hash=None,
+                passwordless=False,
+                **connection_args):
     '''
-    Checks if a user exists on the  MySQL server.
+    Checks if a user exists on the MySQL server. A login can be checked to see
+    if passwordless login is permitted by omitting ``password`` and
+    ``password_hash``, and using ``passwordless=True``.
+
+    .. versionadded:: 0.16.2
+        The ``passwordless`` option was added.
 
     CLI Example::
 
         salt '*' mysql.user_exists 'username' 'hostname' 'password'
-
         salt '*' mysql.user_exists 'username' 'hostname' password_hash='hash'
+        salt '*' mysql.user_exists 'username' passwordless=True
     '''
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
+
     cur = dbc.cursor()
-    query = ('SELECT User,Host FROM mysql.user WHERE User = \'{0}\' AND '
-             'Host = \'{1}\''.format(user, host))
+    qry = ('SELECT User,Host FROM mysql.user WHERE User = \'{0}\' AND '
+           'Host = \'{1}\''.format(user, host))
 
-    if password:
-        query = query + ' AND password = PASSWORD(\'{0}\')'.format(password)
+    if salt.utils.is_true(passwordless):
+        qry += ' AND Password = \'\''
+    elif password:
+        qry += ' AND Password = PASSWORD(\'{0}\')'.format(password)
     elif password_hash:
-        query = query + ' AND password = \'{0}\''.format(password_hash)
+        qry += ' AND Password = \'{0}\''.format(password_hash)
 
-    log.debug('Doing query: {0}'.format(query))
-    cur.execute(query)
+    log.debug('Doing query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
+
     return cur.rowcount == 1
 
 
-def user_info(user, host='localhost'):
+def user_info(user, host='localhost', **connection_args):
     '''
     Get full info on a MySQL user
 
@@ -460,12 +614,21 @@ def user_info(user, host='localhost'):
 
         salt '*' mysql.user_info root localhost
     '''
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
+
     cur = dbc.cursor(MySQLdb.cursors.DictCursor)
-    query = ('SELECT * FROM mysql.user WHERE User = \'{0}\' AND '
-             'Host = \'{1}\''.format(user, host))
-    log.debug('Query: {0}'.format(query))
-    cur.execute(query)
+    qry = ('SELECT * FROM mysql.user WHERE User = \'{0}\' AND '
+           'Host = \'{1}\''.format(user, host))
+    log.debug('Query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
     result = cur.fetchone()
     log.debug(result)
     return result
@@ -474,82 +637,175 @@ def user_info(user, host='localhost'):
 def user_create(user,
                 host='localhost',
                 password=None,
-                password_hash=None):
+                password_hash=None,
+                allow_passwordless=False,
+                **connection_args):
     '''
-    Creates a MySQL user.
+    Creates a MySQL user
+
+    host
+        Host for which this user/password combo applies
+
+    password
+        The password to use for the new user. Will take precedence over the
+        ``password_hash`` option if both are specified.
+
+    password_hash
+        The password in hashed form. Be sure to quote the password because YAML
+        doesn't like the ``*``. A password hash can be obtained from the mysql
+        command-line client like so::
+
+            mysql> SELECT PASSWORD('mypass');
+            +-------------------------------------------+
+            | PASSWORD('mypass')                        |
+            +-------------------------------------------+
+            | *6C8989366EAF75BB670AD8EA7A7FC1176A95CEF4 |
+            +-------------------------------------------+
+            1 row in set (0.00 sec)
+
+    allow_passwordless
+        If ``True``, then ``password`` and ``password_hash`` can be omitted (or
+        set to ``None``) to permit a passwordless login.
+
+    .. versionadded:: 0.16.2
+        The ``allow_passwordless`` option was added.
 
     CLI Examples::
 
         salt '*' mysql.user_create 'username' 'hostname' 'password'
-
         salt '*' mysql.user_create 'username' 'hostname' password_hash='hash'
+        salt '*' mysql.user_create 'username' 'hostname' allow_passwordless=True
     '''
-    if user_exists(user, host):
+    if user_exists(user, host, **connection_args):
         log.info('User \'{0}\'@\'{1}\' already exists'.format(user, host))
         return False
 
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
+
     cur = dbc.cursor()
-    query = 'CREATE USER \'{0}\'@\'{1}\''.format(user, host)
+    qry = 'CREATE USER \'{0}\'@\'{1}\''.format(user, host)
     if password is not None:
-        query = query + ' IDENTIFIED BY \'{0}\''.format(password)
+        qry += ' IDENTIFIED BY \'{0}\''.format(password)
     elif password_hash is not None:
-        query = query + ' IDENTIFIED BY PASSWORD \'{0}\''.format(password_hash)
+        qry += ' IDENTIFIED BY PASSWORD \'{0}\''.format(password_hash)
+    elif not salt.utils.is_true(allow_passwordless):
+        log.error('password or password_hash must be specified, unless '
+                  'allow_passwordless=True')
+        return False
 
-    log.debug('Query: {0}'.format(query))
-    cur.execute(query)
+    log.debug('Query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
 
-    if user_exists(user, host, password, password_hash):
-        log.info('User \'{0}\'@\'{1}\' has been created'.format(user, host))
+    if user_exists(user, host, password, password_hash, **connection_args):
+        msg = 'User \'{0}\'@\'{1}\' has been created'.format(user, host)
+        if not any((password, password_hash)):
+            msg += ' with passwordless login'
+        log.info(msg)
         return True
 
-    log.info('User \'{0}\'@\'{1}\' is not created'.format(user, host))
+    log.info('User \'{0}\'@\'{1}\' was not created'.format(user, host))
     return False
 
 
 def user_chpass(user,
                 host='localhost',
                 password=None,
-                password_hash=None):
+                password_hash=None,
+                allow_passwordless=False,
+                **connection_args):
     '''
-    Change password for MySQL user
+    Change password for a MySQL user
+
+    host
+        Host for which this user/password combo applies
+
+    password
+        The password to set for the new user. Will take precedence over the
+        ``password_hash`` option if both are specified.
+
+    password_hash
+        The password in hashed form. Be sure to quote the password because YAML
+        doesn't like the ``*``. A password hash can be obtained from the mysql
+        command-line client like so::
+
+            mysql> SELECT PASSWORD('mypass');
+            +-------------------------------------------+
+            | PASSWORD('mypass')                        |
+            +-------------------------------------------+
+            | *6C8989366EAF75BB670AD8EA7A7FC1176A95CEF4 |
+            +-------------------------------------------+
+            1 row in set (0.00 sec)
+
+    allow_passwordless
+        If ``True``, then ``password`` and ``password_hash`` can be omitted (or
+        set to ``None``) to permit a passwordless login.
+
+    .. versionadded:: 0.16.2
+        The ``allow_passwordless`` option was added.
 
     CLI Examples::
 
         salt '*' mysql.user_chpass frank localhost newpassword
-
         salt '*' mysql.user_chpass frank localhost password_hash='hash'
+        salt '*' mysql.user_chpass frank localhost allow_passwordless=True
     '''
-    if password is None and password_hash is None:
-        log.error('No password provided')
-        return False
-    elif password is not None:
-        password_sql = 'PASSWORD("{0}")'.format(password)
+    if password is not None:
+        password_sql = 'PASSWORD(\'{0}\')'.format(password)
     elif password_hash is not None:
-        password_sql = '"{0}"'.format(password_hash)
+        password_sql = '\'{0}\''.format(password_hash)
+    elif not salt.utils.is_true(allow_passwordless):
+        log.error('password or password_hash must be specified, unless '
+                  'allow_passwordless=True')
+        return False
+    else:
+        password_sql = '\'\''
 
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
+
     cur = dbc.cursor()
-    query = ('UPDATE mysql.user SET password={0} WHERE User=\'{1}\' AND '
-             'Host = \'{2}\';'.format(password_sql, user, host))
-    log.debug('Query: {0}'.format(query))
-    if cur.execute(query):
+    qry = ('UPDATE mysql.user SET password={0} WHERE User=\'{1}\' AND '
+           'Host = \'{2}\';'.format(password_sql, user, host))
+    log.debug('Query: {0}'.format(qry))
+    try:
+        result = cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
+
+    if result:
         cur.execute('FLUSH PRIVILEGES;')
         log.info(
-            'Password for user \'{0}\'@\'{1}\' has been changed'.format(
-                user, host
+            'Password for user \'{0}\'@\'{1}\' has been {2}'.format(
+                user, host,
+                'changed' if any((password, password_hash)) else 'cleared'
             )
         )
         return True
 
     log.info(
-        'Password for user \'{0}\'@\'{1}\' is not changed'.format(user, host)
+        'Password for user \'{0}\'@\'{1}\' was not {2}'.format(
+            user, host,
+            'changed' if any((password, password_hash)) else 'cleared'
+        )
     )
     return False
 
 
 def user_remove(user,
-                host='localhost'):
+                host='localhost',
+                **connection_args):
     '''
     Delete MySQL user
 
@@ -557,11 +813,21 @@ def user_remove(user,
 
         salt '*' mysql.user_remove frank localhost
     '''
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
+
     cur = dbc.cursor()
-    query = 'DROP USER \'{0}\'@\'{1}\''.format(user, host)
-    log.debug('Query: {0}'.format(query))
-    cur.execute(query)
+    qry = 'DROP USER \'{0}\'@\'{1}\''.format(user, host)
+    log.debug('Query: {0}'.format(qry))
+    try:
+        result = cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
+
     if not user_exists(user, host):
         log.info('User \'{0}\'@\'{1}\' has been removed'.format(user, host))
         return True
@@ -572,7 +838,8 @@ def user_remove(user,
 
 # Maintenance
 def db_check(name,
-             table=None):
+             table=None,
+             **connection_args):
     '''
     Repairs the full database or just a given table
 
@@ -583,20 +850,21 @@ def db_check(name,
     ret = []
     if table is None:
         # we need to check all tables
-        tables = db_tables(name)
+        tables = db_tables(name, **connection_args)
         for table in tables:
             log.info(
                 'Checking table \'{0}\' in db \'{1}..\''.format(name, table)
             )
-            ret.append(__check_table(name, table))
+            ret.append(__check_table(name, table, **connection_args))
     else:
         log.info('Checking table \'{0}\' in db \'{1}\'..'.format(name, table))
-        ret = __check_table(name, table)
+        ret = __check_table(name, table, **connection_args)
     return ret
 
 
 def db_repair(name,
-              table=None):
+              table=None,
+              **connection_args):
     '''
     Repairs the full database or just a given table
 
@@ -607,20 +875,21 @@ def db_repair(name,
     ret = []
     if table is None:
         # we need to repair all tables
-        tables = db_tables(name)
+        tables = db_tables(name, **connection_args)
         for table in tables:
             log.info(
                 'Repairing table \'{0}\' in db \'{1}..\''.format(name, table)
             )
-            ret.append(__repair_table(name, table))
+            ret.append(__repair_table(name, table, **connection_args))
     else:
         log.info('Repairing table \'{0}\' in db \'{1}\'..'.format(name, table))
-        ret = __repair_table(name, table)
+        ret = __repair_table(name, table, **connection_args)
     return ret
 
 
 def db_optimize(name,
-              table=None):
+              table=None,
+              **connection_args):
     '''
     Optimizes the full database or just a given table
 
@@ -631,17 +900,17 @@ def db_optimize(name,
     ret = []
     if table is None:
         # we need to optimize all tables
-        tables = db_tables(name)
+        tables = db_tables(name, **connection_args)
         for table in tables:
             log.info(
                 'Optimizing table \'{0}\' in db \'{1}..\''.format(name, table)
             )
-            ret.append(__optimize_table(name, table))
+            ret.append(__optimize_table(name, table, **connection_args))
     else:
         log.info(
             'Optimizing table \'{0}\' in db \'{1}\'..'.format(name, table)
         )
-        ret = __optimize_table(name, table)
+        ret = __optimize_table(name, table, **connection_args)
     return ret
 
 
@@ -670,17 +939,17 @@ def __grant_generate(grant,
             dbc = '`{0}`'.format(dbc)
         if table is not '*':
             table = '`{0}`'.format(table)
-    query = 'GRANT {0} ON {1}.{2} TO \'{3}\'@\'{4}\''.format(
+    qry = 'GRANT {0} ON {1}.{2} TO \'{3}\'@\'{4}\''.format(
         grant, dbc, table, user, host
     )
     if grant_option:
-        query += ' WITH GRANT OPTION'
-    log.debug('Query generated: {0}'.format(query))
-    return query
+        qry += ' WITH GRANT OPTION'
+    log.debug('Query generated: {0}'.format(qry))
+    return qry
 
 
 def user_grants(user,
-                host='localhost'):
+                host='localhost', **connection_args):
     '''
     Shows the grants for the given MySQL user (if it exists)
 
@@ -688,20 +957,31 @@ def user_grants(user,
 
         salt '*' mysql.user_grants 'frank' 'localhost'
     '''
-    if not user_exists(user, host):
+    if not user_exists(user, host, **connection_args):
         log.info('User \'{0}\'@\'{1}\' does not exist'.format(user, host))
         return False
 
-    ret = []
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
     cur = dbc.cursor()
-    query = 'SHOW GRANTS FOR \'{0}\'@\'{1}\''.format(user, host)
-    log.debug('Doing query: {0}'.format(query))
+    qry = 'SHOW GRANTS FOR \'{0}\'@\'{1}\''.format(user, host)
+    log.debug('Doing query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
 
-    cur.execute(query)
+    ret = []
     results = cur.fetchall()
     for grant in results:
-        ret.append(grant[0].split(' IDENTIFIED BY')[0])
+        tmp = grant[0].split(' IDENTIFIED BY')[0]
+        if 'WITH GRANT OPTION' in grant[0]:
+            tmp = '{} WITH GRANT OPTION'.format(tmp)
+        ret.append(tmp)
     log.debug(ret)
     return ret
 
@@ -711,13 +991,14 @@ def grant_exists(grant,
                 user,
                 host='localhost',
                 grant_option=False,
-                escape=True):
+                escape=True,
+                **connection_args):
     '''
     Checks to see if a grant exists in the database
 
     CLI Example::
 
-        salt \* mysql.grant_exists 'SELECT,INSERT,UPDATE,...' 'database.*' 'frank' 'localhost'
+        salt '*' mysql.grant_exists 'SELECT,INSERT,UPDATE,...' 'database.*' 'frank' 'localhost'
     '''
     # TODO: This function is a bit tricky, since it requires the ordering to
     #       be exactly the same. Perhaps should be replaced/reworked with a
@@ -726,7 +1007,7 @@ def grant_exists(grant,
         grant, database, user, host, grant_option, escape
     )
 
-    grants = user_grants(user, host)
+    grants = user_grants(user, host, **connection_args)
     if grants is not False and target in grants:
         log.debug('Grant exists.')
         return True
@@ -740,7 +1021,8 @@ def grant_add(grant,
               user,
               host='localhost',
               grant_option=False,
-              escape=True):
+              escape=True,
+              **connection_args):
     '''
     Adds a grant to the MySQL server.
 
@@ -751,13 +1033,23 @@ def grant_add(grant,
         salt '*' mysql.grant_add 'SELECT,INSERT,UPDATE,...' 'database.*' 'frank' 'localhost'
     '''
     # todo: validate grant
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
     cur = dbc.cursor()
 
-    query = __grant_generate(grant, database, user, host, grant_option, escape)
-    log.debug('Query: {0}'.format(query))
-    cur.execute(query)
-    if grant_exists(grant, database, user, host, grant_option, escape):
+    qry = __grant_generate(grant, database, user, host, grant_option, escape)
+    log.debug('Query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
+    if grant_exists(
+            grant, database, user, host, grant_option, escape,
+            **connection_args):
         log.info(
             'Grant \'{0}\' on \'{1}\' for user \'{2}\' has been added'.format(
                 grant, database, user
@@ -778,7 +1070,8 @@ def grant_revoke(grant,
                  user,
                  host='localhost',
                  grant_option=False,
-                 escape=True):
+                 escape=True,
+                 **connection_args):
     '''
     Removes a grant from the MySQL server.
 
@@ -787,17 +1080,26 @@ def grant_revoke(grant,
         salt '*' mysql.grant_revoke 'SELECT,INSERT,UPDATE' 'database.*' 'frank' 'localhost'
     '''
     # todo: validate grant
-    dbc = _connect()
+    dbc = _connect(**connection_args)
+    if dbc is None:
+        return False
     cur = dbc.cursor()
 
     if grant_option:
         grant += ', GRANT OPTION'
-    query = 'REVOKE {0} ON {1} FROM \'{2}\'@\'{3}\';'.format(
+    qry = 'REVOKE {0} ON {1} FROM \'{2}\'@\'{3}\';'.format(
         grant, database, user, host
     )
-    log.debug('Query: {0}'.format(query))
-    cur.execute(query)
-    if not grant_exists(grant, database, user, host, grant_option, escape):
+    log.debug('Query: {0}'.format(qry))
+    try:
+        cur.execute(qry)
+    except MySQLdb.OperationalError as exc:
+        err = 'MySQL Error {0}: {1}'.format(*exc)
+        __context__['mysql.error'] = err
+        log.error(err)
+        return False
+
+    if not grant_exists(grant, database, user, host, grant_option, escape, **connection_args):
         log.info(
             'Grant \'{0}\' on \'{1}\' for user \'{2}\' has been '
             'revoked'.format(grant, database, user)
@@ -811,7 +1113,7 @@ def grant_revoke(grant,
     return False
 
 
-def processlist():
+def processlist(**connection_args):
     '''
     Retrieves the processlist from the MySQL server via
     "SHOW FULL PROCESSLIST".
@@ -835,21 +1137,16 @@ def processlist():
 
     '''
     ret = []
-    hdr = ('Id', 'User', 'Host', 'db', 'Command', 'Time', 'State',
-           'Info', 'Rows_sent', 'Rows_examined', 'Rows_read')
 
-    log.debug('MySQL Process List:\n{0}'.format(processlist()))
-    dbc = _connect()
+    dbc = _connect(**connection_args)
     cur = dbc.cursor()
-    cur.execute("SHOW FULL PROCESSLIST")
+    cur.execute('SHOW FULL PROCESSLIST')
+    hdr = [c[0] for c in cur.description]
     for _ in range(cur.rowcount):
         row = cur.fetchone()
         idx_r = {}
         for idx_j in range(len(hdr)):
-            try:
-                idx_r[hdr[idx_j]] = row[idx_j]
-            except KeyError:
-                pass
+            idx_r[hdr[idx_j]] = row[idx_j]
         ret.append(idx_r)
     cur.close()
     return ret
@@ -901,9 +1198,9 @@ def __do_query_into_hash(conn, sql_str):
     return rtn_results
 
 
-def get_master_status():
+def get_master_status(**connection_args):
     '''
-    Retrieves the master status from the mimion.
+    Retrieves the master status from the minion.
 
     Returns:
         {'host.domain.com': {'Binlog_Do_DB': '',
@@ -918,7 +1215,7 @@ def get_master_status():
     '''
     mod = sys._getframe().f_code.co_name
     log.debug('{0}<--'.format(mod))
-    conn = _connect()
+    conn = _connect(**connection_args)
     rtnv = __do_query_into_hash(conn, "SHOW MASTER STATUS")
     conn.close()
 
@@ -930,7 +1227,7 @@ def get_master_status():
     return rtnv[0]
 
 
-def get_slave_status():
+def get_slave_status(**connection_args):
     '''
     Retrieves the slave status from the minion.
 
@@ -984,7 +1281,7 @@ def get_slave_status():
     '''
     mod = sys._getframe().f_code.co_name
     log.debug('{0}<--'.format(mod))
-    conn = _connect()
+    conn = _connect(**connection_args)
     rtnv = __do_query_into_hash(conn, "SHOW SLAVE STATUS")
     conn.close()
 

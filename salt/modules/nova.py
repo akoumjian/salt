@@ -2,8 +2,8 @@
 Module for handling openstack nova calls.
 
 :depends:   - novaclient Python module
-:configuration: This module is not usable until the user, password, tenant and
-    auth url are specified either in a pillar or in the minion's config file.
+:configuration: This module is not usable until the user, password, tenant, and
+    auth URL are specified either in a pillar or in the minion's config file.
     For example::
 
         keystone.user: admin
@@ -23,6 +23,10 @@ except ImportError:
 # Import salt libs
 import salt.utils
 
+# Function alias to not shadow built-in's
+__func_alias__ = {
+    'list_': 'list'
+}
 
 def __virtual__():
     '''
@@ -77,8 +81,8 @@ def flavor_list():
     return ret
 
 
-def flavor_create(name,      # pylint: disable-msg=C0103
-                  id=0,      # pylint: disable-msg=C0103
+def flavor_create(name,      # pylint: disable=C0103
+                  id=0,      # pylint: disable=C0103
                   ram=0,
                   disk=0,
                   vcpus=1):
@@ -107,7 +111,7 @@ def flavor_create(name,      # pylint: disable-msg=C0103
             'vcpus': vcpus}
 
 
-def flavor_delete(id):  # pylint: disable-msg=C0103
+def flavor_delete(id):  # pylint: disable=C0103
     '''
     Delete a flavor from nova by id (nova flavor-delete)
 
@@ -205,7 +209,7 @@ def image_list(name=None):
     return ret
 
 
-def image_meta_set(id=None, name=None, **kwargs):  # pylint: disable-msg=C0103
+def image_meta_set(id=None, name=None, **kwargs):  # pylint: disable=C0103
     '''
     Sets a key=value pair in the metadata for an image (nova image-meta set)
 
@@ -218,14 +222,14 @@ def image_meta_set(id=None, name=None, **kwargs):  # pylint: disable-msg=C0103
     if name:
         for image in nt_ks.images.list():
             if image.name == name:
-                id = image.id  # pylint: disable-msg=C0103
+                id = image.id  # pylint: disable=C0103
     if not id:
         return {'Error': 'A valid image name or id was not specified'}
     nt_ks.images.set_meta(id, kwargs)
     return {id: kwargs}
 
 
-def image_meta_delete(id=None,     # pylint: disable-msg=C0103
+def image_meta_delete(id=None,     # pylint: disable=C0103
                       name=None,
                       keys=None):
     '''
@@ -240,7 +244,7 @@ def image_meta_delete(id=None,     # pylint: disable-msg=C0103
     if name:
         for image in nt_ks.images.list():
             if image.name == name:
-                id = image.id  # pylint: disable-msg=C0103
+                id = image.id  # pylint: disable=C0103
     pairs = keys.split(',')
     if not id:
         return {'Error': 'A valid image name or id was not specified'}
@@ -248,7 +252,7 @@ def image_meta_delete(id=None,     # pylint: disable-msg=C0103
     return {id: 'Deleted: {0}'.format(pairs)}
 
 
-def list():
+def list_():
     '''
     To maintain the feel of the nova command line, this function simply calls
     the server_list function.
@@ -410,7 +414,7 @@ def _item_list():
 #aggregate-details   Show details of the specified aggregate.
 #aggregate-list      Print a list of all aggregates.
 #aggregate-remove-host
-#                    Remove the specified host from the specfied aggregate.
+#                    Remove the specified host from the specified aggregate.
 #aggregate-set-metadata
 #                    Update the metadata associated with the aggregate.
 #aggregate-update    Update the aggregate's name and optionally

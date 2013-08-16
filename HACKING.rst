@@ -92,8 +92,8 @@ Debian-based systems
 On Debian and derivative systems such as Ubuntu, system requirements can be
 installed by running::
 
-    apt-get install -y build-essential libssl-dev python-dev python-m2crypto
-    python-pip python-virtualenv swig virtualenvwrapper
+    apt-get install -y build-essential libssl-dev python-dev python-m2crypto \
+      python-pip python-virtualenv swig virtualenvwrapper
 
 RedHat-based systems
 ````````````````````
@@ -236,7 +236,7 @@ Edit the minion config file:
     config file. Without the ``-c`` option, Salt finds its config files in
     `/etc/salt`.
 
-Start the master and minion, accept the minon's key, and verify your local Salt
+Start the master and minion, accept the minion's key, and verify your local Salt
 installation is working::
 
     cd /path/to/your/virtualenv

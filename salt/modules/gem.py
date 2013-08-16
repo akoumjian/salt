@@ -5,6 +5,9 @@ Manage ruby gems.
 # Import python libs
 import re
 
+__func_alias__ = {
+    'list_': 'list'
+}
 
 def _gem(command, ruby=None, runas=None):
     cmdline = 'gem {command}'.format(command=command)
@@ -22,12 +25,12 @@ def _gem(command, ruby=None, runas=None):
         return False
 
 
-def install(gems,           # pylint: disable-msg=C0103
+def install(gems,           # pylint: disable=C0103
             ruby=None,
             runas=None,
             version=None,
             rdoc=False,
-            ri=False):      # pylint: disable-msg=C0103
+            ri=False):      # pylint: disable=C0103
     '''
     Installs one or several gems.
 
@@ -117,7 +120,7 @@ def update_system(version='', ruby=None, runas=None):
                 format(version=version), ruby, runas=runas)
 
 
-def list(prefix='', ruby=None, runas=None):
+def list_(prefix='', ruby=None, runas=None):
     '''
     List locally installed gems.
 
@@ -139,7 +142,7 @@ def list(prefix='', ruby=None, runas=None):
     if isinstance(stdout, str):
         lines = stdout.splitlines()
     for line in lines:
-        match = re.match('^([^ ]+) \((.+)\)', line)
+        match = re.match(r'^([^ ]+) \((.+)\)', line)
         if match:
             gem = match.group(1)
             versions = match.group(2).split(', ')
@@ -198,4 +201,5 @@ def sources_list(ruby=None, runas=None):
 
         salt '*' gem.sources_list
     '''
-    return _gem('sources', ruby, runas=runas).splitlines()[2:]
+    ret = _gem('sources', ruby, runas=runas)
+    return [] if ret is False else ret.splitlines()[2:]

@@ -15,9 +15,11 @@ import salt.crypt
 from salt._compat import string_types
 from salt.template import compile_template
 from salt.utils.dictupdate import update
+from salt.utils.odict import OrderedDict
 from salt.version import __version__
 
 log = logging.getLogger(__name__)
+
 
 def get_pillar(opts, grains, id_, env=None, ext=None):
     '''
@@ -78,6 +80,17 @@ class Pillar(object):
         self.rend = salt.loader.render(self.opts, self.functions)
         self.ext_pillars = salt.loader.pillars(self.opts, self.functions)
 
+    def __valid_ext(self, ext):
+        '''
+        Check to see if the on demand external pillar is allowed
+        '''
+        if not isinstance(ext, dict):
+            return {}
+        valid = set(('libvirt', 'virtkey'))
+        if any(key not in valid for key in ext):
+            return {}
+        return ext
+
     def __gen_opts(self, opts_in, grains, id_, env=None, ext=None):
         '''
         The options need to be altered to conform to the file client
@@ -95,11 +108,11 @@ class Pillar(object):
             opts['state_top'] = os.path.join('salt://', opts['state_top'][1:])
         else:
             opts['state_top'] = os.path.join('salt://', opts['state_top'])
-        if ext:
-            if 'ext_pillar'  in opts:
+        if self.__valid_ext(ext):
+            if 'ext_pillar' in opts:
                 opts['ext_pillar'].append(ext)
             else:
-                opts['ext_pillar'].append(ext)
+                opts['ext_pillar'] = [ext]
         return opts
 
     def _get_envs(self):
@@ -154,7 +167,7 @@ class Pillar(object):
         # Search initial top files for includes
         for env, ctops in tops.items():
             for ctop in ctops:
-                if not 'include' in ctop:
+                if 'include' not in ctop:
                     continue
                 for sls in ctop['include']:
                     include[env].append(sls)
@@ -175,7 +188,7 @@ class Pillar(object):
                                     self.client.get_state(
                                         sls,
                                         env
-                                        ),
+                                        ).get('dest', False),
                                     self.rend,
                                     self.opts['renderer'],
                                     env=env
@@ -197,25 +210,45 @@ class Pillar(object):
         Cleanly merge the top files
         '''
         top = collections.defaultdict(dict)
-        for sourceenv, ctops in tops.items():
+        orders = collections.defaultdict(dict)
+        for ctops in tops.values():
             for ctop in ctops:
                 for env, targets in ctop.items():
                     if env == 'include':
                         continue
                     for tgt in targets:
-                        if not tgt in top[env]:
-                            top[env][tgt] = ctop[env][tgt]
-                            continue
                         matches = []
                         states = set()
-                        for comp in top[env][tgt]:
+                        orders[env][tgt] = 0
+                        for comp in ctop[env][tgt]:
                             if isinstance(comp, dict):
-                                matches.append(comp)
+                                if 'match' in comp:
+                                    matches.append(comp)
+                                if 'order' in comp:
+                                    order = comp['order']
+                                    if not isinstance(order, int):
+                                        try:
+                                            order = int(order)
+                                        except ValueError:
+                                            order = 0
+                                    orders[env][tgt] = order
                             if isinstance(comp, string_types):
                                 states.add(comp)
                         top[env][tgt] = matches
                         top[env][tgt].extend(list(states))
-        return top
+        return self.sort_top_targets(top, orders)
+
+    def sort_top_targets(self, top, orders):
+        '''
+        Returns the sorted high data from the merged top files
+        '''
+        sorted_top = collections.defaultdict(OrderedDict)
+        for env, targets in top.items():
+            sorted_targets = sorted(targets.keys(),
+                    key=lambda target: orders[env][target])
+            for target in sorted_targets:
+                sorted_top[env][target] = targets[target]
+        return sorted_top
 
     def get_top(self):
         '''
@@ -235,7 +268,7 @@ class Pillar(object):
         matches = {}
         for env, body in top.items():
             if self.opts['environment']:
-                if not env == self.opts['environment']:
+                if env != self.opts['environment']:
                     continue
             for match, data in body.items():
                 if self.matcher.confirm_top(
@@ -250,45 +283,64 @@ class Pillar(object):
                             matches[env].append(item)
         return matches
 
-    def render_pstate(self, sls, env, mods):
+    def render_pstate(self, sls, env, mods, defaults=None):
         '''
         Collect a single pillar sls file and render it
         '''
+        if defaults is None:
+            defaults = {}
         err = ''
         errors = []
-        fn_ = self.client.get_state(sls, env)
+        fn_ = self.client.get_state(sls, env).get('dest', False)
         if not fn_:
-            errors.append(('Specified SLS {0} in environment {1} is not'
-                           ' available on the salt master').format(sls, env))
+            msg = ('Specified SLS {0!r} in environment {1!r} is not'
+                   ' available on the salt master').format(sls, env)
+            log.error(msg)
+            errors.append(msg)
         state = None
         try:
             state = compile_template(
-                fn_, self.rend, self.opts['renderer'], env, sls)
+                fn_, self.rend, self.opts['renderer'], env, sls, **defaults)
         except Exception as exc:
-            errors.append(('Rendering SLS {0} failed, render error:\n{1}'
-                           .format(sls, exc)))
+            msg = 'Rendering SLS {0!r} failed, render error:\n{1}'.format(
+                sls, exc
+            )
+            log.error(msg)
+            errors.append(msg)
         mods.add(sls)
         nstate = None
         if state:
             if not isinstance(state, dict):
-                errors.append(('SLS {0} does not render to a dictionary'
-                               .format(sls)))
+                msg = 'SLS {0!r} does not render to a dictionary'.format(sls)
+                log.error(msg)
+                errors.append(msg)
             else:
                 if 'include' in state:
                     if not isinstance(state['include'], list):
-                        err = ('Include Declaration in SLS {0} is not formed '
-                               'as a list'.format(sls))
-                        errors.append(err)
+                        msg = ('Include Declaration in SLS {0!r} is not '
+                               'formed as a list'.format(sls))
+                        log.error(msg)
+                        errors.append(msg)
                     else:
                         for sub_sls in state.pop('include'):
+                            if isinstance(sub_sls, dict):
+                                sub_sls, v = sub_sls.iteritems().next()
+                                defaults = v.get('defaults', {})
+                                key = v.get('key', None)
+                            else:
+                                key = None
                             if sub_sls not in mods:
                                 nstate, mods, err = self.render_pstate(
                                         sub_sls,
                                         env,
-                                        mods
+                                        mods,
+                                        defaults
                                         )
                             if nstate:
-                                state.update(nstate)
+                                if key:
+                                    state[key] = nstate
+                                else:
+                                    state.update(nstate)
                             if err:
                                 errors += err
         return state, mods, errors
@@ -304,10 +356,24 @@ class Pillar(object):
             mods = set()
             for sls in pstates:
                 pstate, mods, err = self.render_pstate(sls, env, mods)
-                if pstate:
-                    pillar.update(pstate)
+
                 if err:
                     errors += err
+
+                if pstate is not None:
+                    if not isinstance(pstate, dict):
+                        log.error(
+                            'The rendered pillar sls file, {0!r} state did '
+                            'not return the expected data format. This is '
+                            'a sign of a malformed pillar sls file. Returned '
+                            'errors: {1}'.format(
+                                sls,
+                                ', '.join(['{0!r}'.format(e) for e in errors])
+                            )
+                        )
+                        continue
+                    pillar.update(pstate)
+
         return pillar, errors
 
     def ext_pillar(self, pillar):
@@ -330,13 +396,33 @@ class Pillar(object):
                     log.critical(err)
                     continue
                 try:
-                    if isinstance(val, dict):
-                        ext = self.ext_pillars[key](pillar, **val)
-                    elif isinstance(val, list):
-                        ext = self.ext_pillars[key](pillar, *val)
-                    else:
-                        ext = self.ext_pillars[key](pillar, val)
-                    update(pillar, ext)
+                    try:
+                        # try the new interface, which includes the minion ID
+                        # as first argument
+                        if isinstance(val, dict):
+                            ext = self.ext_pillars[key](self.opts['id'], pillar, **val)
+                        elif isinstance(val, list):
+                            ext = self.ext_pillars[key](self.opts['id'], pillar, *val)
+                        else:
+                            ext = self.ext_pillars[key](self.opts['id'], pillar, val)
+                        update(pillar, ext)
+
+                    except TypeError as e:
+                        if e.message.startswith('ext_pillar() takes exactly '):
+                            log.warning('Deprecation warning: ext_pillar "{0}"'
+                                        ' needs to accept minion_id as first'
+                                        ' argument'.format(key))
+                        else:
+                            raise
+
+                        if isinstance(val, dict):
+                            ext = self.ext_pillars[key](pillar, **val)
+                        elif isinstance(val, list):
+                            ext = self.ext_pillars[key](pillar, *val)
+                        else:
+                            ext = self.ext_pillars[key](pillar, val)
+                        update(pillar, ext)
+
                 except Exception as exc:
                     log.exception(
                             'Failed to load ext_pillar {0}: {1}'.format(
@@ -348,7 +434,7 @@ class Pillar(object):
 
     def compile_pillar(self):
         '''
-        Render the pillar dta and return
+        Render the pillar data and return
         '''
         top, terrors = self.get_top()
         matches = self.top_matches(top)
@@ -366,5 +452,5 @@ class Pillar(object):
         if errors:
             for error in errors:
                 log.critical('Pillar render error: {0}'.format(error))
-            return {}
+            pillar['_errors'] = errors
         return pillar

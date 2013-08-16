@@ -14,7 +14,7 @@ def get(key, default=''):
     '''
     .. versionadded:: 0.14
 
-    Attempt to retrive the named value from pillar, if the named value is not
+    Attempt to retrieve the named value from pillar, if the named value is not
     available return the passed default. The default return is an empty string.
 
     The value can also represent a value in a nested dict using a ":" delimiter
@@ -22,7 +22,7 @@ def get(key, default=''):
 
     {'pkg': {'apache': 'httpd'}}
 
-    To retrive the value associated with the apache key in the pkg dict this
+    To retrieve the value associated with the apache key in the pkg dict this
     key can be passed:
 
     pkg:apache
@@ -34,34 +34,51 @@ def get(key, default=''):
     return salt.utils.traverse_dict(__pillar__, key, default)
 
 
-def data(key=None):
+def items(*args):
     '''
-    Returns the pillar derived from the configured pillar source. The pillar
-    source is derived from the file_client option in the minion config
+    This function calls the master for a fresh pillar and generates the pillar
+    data on the fly, unlike pillar.raw which returns the pillar data which
+    is currently loaded into the minion.
 
     CLI Example::
 
-        salt '*' pillar.data
-
-    With the optional key argument, you can select a subtree of the
-    pillar data.::
-
-        salt '*' pillar.data key='roles'
+        salt '*' pillar.items
     '''
+    # Preserve backwards compatibility
+    if args:
+        return item(*args)
+
     pillar = salt.pillar.get_pillar(
         __opts__,
         __grains__,
         __opts__['id'],
         __opts__['environment'])
 
-    ret = pillar.compile_pillar()
+    return pillar.compile_pillar()
 
-    if key:
-        ret = ret.get(key, {})
+# Allow pillar.data to also be used to return pillar data
+data = items
 
+
+def item(*args):
+    '''
+    .. versionadded:: 0.16.2
+
+    Return one ore more pillar entries
+
+    CLI Examples::
+
+        salt '*' pillar.item foo
+        salt '*' pillar.item foo bar baz
+    '''
+    ret = {}
+    pillar = items()
+    for arg in args:
+        try:
+            ret[arg] = pillar[arg]
+        except KeyError:
+            pass
     return ret
-# Allow pillar.items to also be used to return pillar data
-items = data
 
 
 def raw(key=None):

@@ -24,7 +24,7 @@ def _formatHostname(hostname, separator='_'):
     ''' carbon uses . as separator, so replace this in the hostname '''
     return hostname.replace('.', separator)
 
-def _send_picklemetrics(metrics):
+def _send_picklemetrics(metrics, carbon_sock):
     ''' Uses pickle protocol to send data '''
     metrics = [(metric_name, (timestamp, value)) for (metric_name, timestamp, value) in metrics]
     data = pickle.dumps(metrics, protocol=-1)
@@ -33,7 +33,7 @@ def _send_picklemetrics(metrics):
     total_sent_bytes = 0
     while total_sent_bytes < len(data):
         sent_bytes = carbon_sock.send(data[total_sent_bytes:])
-        if sent_bytes == 0: 
+        if sent_bytes == 0:
             log.error('Bytes sent 0, Connection reset?')
             return
         total_sent_bytes += sent_bytes
@@ -64,7 +64,7 @@ def returner(ret):
     timestamp = int(time.time())
 
     saltdata = ret['return']
-    metric_base = ret['fun'] 
+    metric_base = ret['fun']
     # Strip the hostname from the carbon base if we are returning from virt
     # module since then we will get stable metric bases even if the VM is
     # migrate from host to host
@@ -78,7 +78,7 @@ def returner(ret):
                 val = float(val)
                 metrics.append((metric_base + '.' + _formatHostname(name) + '.' + key, val, timestamp))
             except TypeError:
-                log.info('Error in carbon returner, when trying to convert metric:{0},with val:{1}'.format(key, val))
+                log.info('Error in carbon returner, when trying to convert metric:{0}, with val:{1}'.format(key, val))
 
     def _send_textmetrics(metrics):
         ''' Use text protorocol to send metric over socket '''
@@ -90,7 +90,7 @@ def returner(ret):
         total_sent_bytes = 0
         while total_sent_bytes < len(data):
             sent_bytes = carbon_sock.send(data[total_sent_bytes:])
-            if sent_bytes == 0: 
+            if sent_bytes == 0:
                 log.error('Bytes sent 0, Connection reset?')
                 return
             logging.debug('Sent {0} bytes to carbon'.format(sent_bytes))
@@ -103,8 +103,3 @@ def returner(ret):
     # Shut down and close socket
     carbon_sock.shutdown(socket.SHUT_RDWR)
     carbon_sock.close()
-
-
-
-
-

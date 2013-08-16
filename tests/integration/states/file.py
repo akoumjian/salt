@@ -6,6 +6,10 @@ Tests for the file state
 import os
 import shutil
 
+# Import Salt Testing libs
+from salttesting.helpers import ensure_in_syspath
+ensure_in_syspath('../../')
+
 # Import salt libs
 import integration
 import salt.utils
@@ -124,7 +128,8 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
             fp_.write('test_managed_show_diff_false\n')
 
         ret = self.run_state(
-            'file.managed', name=name, source='salt://grail/scene33', show_diff=False
+            'file.managed', name=name, source='salt://grail/scene33',
+            show_diff=False
         )
 
         changes = ret.values()[0]['changes']
@@ -147,6 +152,106 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
         ret = self.run_state('file.directory', test=True, name=name)
         self.assertSaltNoneReturn(ret)
         self.assertFalse(os.path.isdir(name))
+
+    def test_directory_clean(self):
+        '''
+        file.directory with clean=True
+        '''
+        name = os.path.join(integration.TMP, 'directory_clean_dir')
+        if not os.path.isdir(name):
+            os.makedirs(name)
+
+        strayfile = os.path.join(name, 'strayfile')
+        salt.utils.fopen(strayfile, 'w').close()
+
+        straydir = os.path.join(name, 'straydir')
+        if not os.path.isdir(straydir):
+            os.makedirs(straydir)
+
+        salt.utils.fopen(os.path.join(straydir, 'strayfile2'), 'w').close()
+
+        ret = self.run_state('file.directory', name=name, clean=True)
+        try:
+            self.assertSaltTrueReturn(ret)
+            self.assertFalse(os.path.exists(strayfile))
+            self.assertFalse(os.path.exists(straydir))
+            self.assertTrue(os.path.isdir(name))
+        finally:
+            shutil.rmtree(name, ignore_errors=True)
+
+    def test_directory_clean_exclude(self):
+        '''
+        file.directory with clean=True and exclude_pat set
+        '''
+        name = os.path.join(integration.TMP, 'directory_clean_dir')
+        if not os.path.isdir(name):
+            os.makedirs(name)
+
+        strayfile = os.path.join(name, 'strayfile')
+        salt.utils.fopen(strayfile, 'w').close()
+
+        straydir = os.path.join(name, 'straydir')
+        if not os.path.isdir(straydir):
+            os.makedirs(straydir)
+
+        strayfile2 = os.path.join(straydir, 'strayfile2')
+        salt.utils.fopen(strayfile2, 'w').close()
+
+        keepfile = os.path.join(straydir, 'keepfile')
+        salt.utils.fopen(keepfile, 'w').close()
+
+        ret = self.run_state('file.directory',
+                             name=name,
+                             clean=True,
+                             exclude_pat='E@^straydir(|/keepfile)$')
+
+        try:
+            self.assertSaltTrueReturn(ret)
+            self.assertFalse(os.path.exists(strayfile))
+            self.assertFalse(os.path.exists(strayfile2))
+            self.assertTrue(os.path.exists(keepfile))
+        finally:
+            shutil.rmtree(name, ignore_errors=True)
+
+    def test_test_directory_clean_exclude(self):
+        '''
+        file.directory test with clean=True and exclude_pat set
+        '''
+        name = os.path.join(integration.TMP, 'directory_clean_dir')
+        if not os.path.isdir(name):
+            os.makedirs(name)
+
+        strayfile = os.path.join(name, 'strayfile')
+        salt.utils.fopen(strayfile, 'w').close()
+
+        straydir = os.path.join(name, 'straydir')
+        if not os.path.isdir(straydir):
+            os.makedirs(straydir)
+
+        strayfile2 = os.path.join(straydir, 'strayfile2')
+        salt.utils.fopen(strayfile2, 'w').close()
+
+        keepfile = os.path.join(straydir, 'keepfile')
+        salt.utils.fopen(keepfile, 'w').close()
+
+        ret = self.run_state('file.directory',
+                             test=True,
+                             name=name,
+                             clean=True,
+                             exclude_pat='E@^straydir(|/keepfile)$')
+
+        comment = ret.values()[0]['comment']
+        try:
+            self.assertSaltNoneReturn(ret)
+            self.assertTrue(os.path.exists(strayfile))
+            self.assertTrue(os.path.exists(strayfile2))
+            self.assertTrue(os.path.exists(keepfile))
+
+            self.assertIn(strayfile, comment)
+            self.assertIn(strayfile2, comment)
+            self.assertNotIn(keepfile, comment)
+        finally:
+            shutil.rmtree(name, ignore_errors=True)
 
     def test_recurse(self):
         '''
@@ -362,7 +467,13 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
         '''
         fname = 'append_issue_1864_makedirs'
         name = os.path.join(integration.TMP, fname)
+        try:
+            self.assertFalse(os.path.exists(name))
+        except AssertionError:
+            os.remove(name)
+
         ret = self.run_state('file.append', name=name, text='cheese')
+        # A non existing file is touched, the text is NOT appended.
         self.assertSaltFalseReturn(ret)
 
         try:
@@ -422,7 +533,7 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
                 # left behind... Don't fail because of this!
                 os.makedirs(name)
         except OSError:
-            self.skipTest("Failed to create directory {0}".format(name))
+            self.skipTest('Failed to create directory {0}'.format(name))
 
         self.assertTrue(os.path.isdir(name))
         ret = self.run_state('file.touch', name=name)
@@ -472,7 +583,7 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
             if os.path.isfile(tmp_file_append):
                 os.remove(tmp_file_append)
 
-    def do_patch(self, patch_name='hello', src="Hello\n"):
+    def do_patch(self, patch_name='hello', src='Hello\n'):
         if not self.run_function('cmd.has_exec', ['patch']):
             self.skipTest('patch is not installed')
         src_file = os.path.join(integration.TMP, 'src.txt')
@@ -513,9 +624,9 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
         salt.utils.fopen(tmp_file, 'w').write('hello\nworld\n')
         # create the sls template
         template_lines = [
-            "{0}:".format(tmp_file),
-            "  file.comment:",
-            "    - regex: ^world"
+            '{0}:'.format(tmp_file),
+            '  file.comment:',
+            '    - regex: ^world'
         ]
         template = '\n'.join(template_lines)
         try:
@@ -551,9 +662,9 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
         )
         # create the sls template
         template_lines = [
-            "{0}:".format(tmp_file),
-            "  file.append:",
-            "    - text: PermitRootLogin yes"
+            '{0}:'.format(tmp_file),
+            '  file.append:',
+            '    - text: PermitRootLogin yes'
         ]
         template = '\n'.join(template_lines)
         try:

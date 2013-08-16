@@ -6,6 +6,10 @@ Module to manage Linux kernel modules
 import os
 import re
 
+# Import salt libs
+import salt.utils
+
+
 def __virtual__():
     '''
     Only runs on Linux systems
@@ -41,7 +45,7 @@ def _rm_mods(pre_mods, post_mods):
     return pre - post
 
 
-def _union_module(a,b):
+def _union_module(a, b):
     '''
     Return union of two list where duplicated items are only once
     '''
@@ -53,6 +57,8 @@ def _get_modules_conf():
     Return location of modules config file.
     Default: /etc/modules
     '''
+    if __grains__['os'] == 'Arch':
+        return '/etc/modules-load.d/salt_managed.conf'
     return '/etc/modules'
 
 
@@ -75,7 +81,7 @@ def _set_persistent_module(mod):
     '''
     conf = _get_modules_conf()
     mod_name = _strip_module_name(mod)
-    if not mod_name or mod_name in mod_list(True) or not mod_name in available():
+    if not mod_name or mod_name in mod_list(True) or mod_name not in available():
         return set()
     escape_mod = re.escape(mod)
     ## If module is commented only uncomment it
@@ -83,7 +89,7 @@ def _set_persistent_module(mod):
         __salt__['file.uncomment'](conf, escape_mod)
     else:
         __salt__['file.append'](conf, mod)
-    return set([mod_name,])
+    return set([mod_name])
 
 
 def _remove_persistent_module(mod, comment):
@@ -93,14 +99,14 @@ def _remove_persistent_module(mod, comment):
     '''
     conf = _get_modules_conf()
     mod_name = _strip_module_name(mod)
-    if not mod_name or not mod_name in mod_list(True):
+    if not mod_name or mod_name not in mod_list(True):
         return set()
     escape_mod = re.escape(mod)
     if comment:
         __salt__['file.comment'](conf, "^[\t ]*{}[\t ]?".format(escape_mod))
     else:
         __salt__['file.sed'](conf, "^[\t ]*{}[\t ]?".format(escape_mod), '')
-    return set([mod_name,])
+    return set([mod_name])
 
 
 def available():
@@ -169,19 +175,19 @@ def mod_list(only_persist=False):
     '''
     mods = set()
     if only_persist:
-        file = open(_get_modules_conf(), 'r')
-        for line in file.readlines():
-            line = line.strip()
-            mod_name = _strip_module_name(line)
-            if not line.startswith('#') and mod_name:
-                mods.add(mod_name)
+        with salt.utils.fopen(_get_modules_conf(), 'r') as modules_file:
+            for line in modules_file:
+                line = line.strip()
+                mod_name = _strip_module_name(line)
+                if not line.startswith('#') and mod_name:
+                    mods.add(mod_name)
     else:
         for mod in lsmod():
             mods.add(mod['module'])
     return sorted(list(mods))
 
 
-def load(mod, persist=False):    
+def load(mod, persist=False):
     '''
     Load the specified kernel module
 
@@ -206,6 +212,17 @@ def load(mod, persist=False):
         return sorted(list(mods | persist_mods))
     else:
         return 'Module {0} not found'.format(mod)
+
+
+def is_loaded(mod):
+    '''
+    Check to see if the specified kernel module is loaded
+
+    CLI Example::
+
+        salt '*' kmod.is_loaded kvm
+    '''
+    return mod in mod_list()
 
 
 def remove(mod, persist=False, comment=True):

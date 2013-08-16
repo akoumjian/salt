@@ -2,13 +2,10 @@
 Control virtual machines via Salt
 '''
 
-# Import python libs
-import os
-import subprocess
-
 # Import Salt libs
 import salt.client
 import salt.output
+import salt.utils.virt
 
 
 def _determine_hyper(data, omit=''):
@@ -38,7 +35,7 @@ def _find_vm(name, data, quiet=False):
     '''
     for hv_ in data:
         # Check if data is a dict, and not '"virt.full_info" is not available.'
-        if not isinstance(data[hv_, dict]):
+        if not isinstance(data[hv_], dict):
             continue
         if name in data[hv_].get('vm_info', {}):
             ret = {hv_: {name: data[hv_]['vm_info'][name]}}
@@ -50,13 +47,15 @@ def _find_vm(name, data, quiet=False):
             return ret
     return {}
 
+
 def query(hyper=None, quiet=False):
     '''
     Query the virtual machines
     '''
     ret = {}
     client = salt.client.LocalClient(__opts__['conf_file'])
-    for info in client.cmd_iter('virtual:physical', 'virt.full_info', expr_form='grain'):
+    for info in client.cmd_iter('virtual:physical',
+                                'virt.full_info', expr_form='grain'):
         if not info:
             continue
         if not isinstance(info, dict):
@@ -68,12 +67,49 @@ def query(hyper=None, quiet=False):
                 continue
         if not isinstance(info[id_], dict):
             continue
-        if not 'ret' in info[id_]:
+        if 'ret' not in info[id_]:
             continue
         chunk[id_] = info[id_]['ret']
         ret.update(chunk)
         if not quiet:
             salt.output.display_output(chunk, 'virt_query', __opts__)
+
+    return ret
+
+
+def list(hyper=None, quiet=False):
+    '''
+    List the virtual machines on each hyper
+    '''
+    ret = {}
+    client = salt.client.LocalClient(__opts__['conf_file'])
+    for info in client.cmd_iter('virtual:physical',
+                                'virt.vm_info', expr_form='grain'):
+        if not info:
+            continue
+        if not isinstance(info, dict):
+            continue
+        chunk = {}
+        id_ = info.keys()[0]
+        if hyper:
+            if hyper != id_:
+                continue
+        if not isinstance(info[id_], dict):
+            continue
+        if 'ret' not in info[id_]:
+            continue
+        if not isinstance(info[id_]['ret'], dict):
+            continue
+        data = {}
+        for k, v in info[id_]['ret'].items():
+            if v['state'] in data:
+                data[v['state']].append(k)
+            else:
+                data[v['state']] = [k]
+        chunk[id_] = data
+        ret.update(chunk)
+        if not quiet:
+            salt.output.display_output(chunk, 'virt_list', __opts__)
 
     return ret
 
@@ -99,7 +135,7 @@ def hyper_info(hyper=None):
     return data
 
 
-def init(name, cpu, mem, image, hyper=None, seed=True):
+def init(name, cpu, mem, image, hyper=None, seed=True, nic='default', install=True):
     '''
     Initialize a new vm
     '''
@@ -112,23 +148,36 @@ def init(name, cpu, mem, image, hyper=None, seed=True):
                 print('Virtual machine {0} is already deployed'.format(name))
                 return 'fail'
     if hyper:
-        if not hyper in data:
+        if hyper not in data:
             print('Hypervisor {0} was not found'.format(hyper))
             return 'fail'
     else:
         hyper = _determine_hyper(data)
-    
+
+    if seed:
+        print('Minion will be preseeded')
+        kv = salt.utils.virt.VirtKey(hyper, name, __opts__)
+        kv.authorize()
+
     client = salt.client.LocalClient(__opts__['conf_file'])
 
     print('Creating VM {0} on hypervisor {1}'.format(name, hyper))
     cmd_ret = client.cmd_iter(
             hyper,
             'virt.init',
-            [name, cpu, mem, image, 'seed={0}'.format(seed)],
+            [
+                name,
+                cpu,
+                mem,
+                image,
+                'seed={0}'.format(seed),
+                'nic={0}'.format(nic),
+                'install={0}'.format(install)
+            ],
             timeout=600)
 
-    for info in cmd_ret:
-        print('VM {0} initialized on hypervisor {1}'.format(name, hyper))
+    next(cmd_ret)
+    print('VM {0} initialized on hypervisor {1}'.format(name, hyper))
 
     return 'good'
 
@@ -304,4 +353,6 @@ def migrate(name, target=''):
         print('Target hypervisor {0} not found'.format(origin_data))
         return ''
     client.cmd(target, 'virt.seed_non_shared_migrate', [disks, True])
-    print client.cmd_async(origin_hyper, 'virt.migrate_non_shared', [name, target])
+    print client.cmd_async(origin_hyper,
+                           'virt.migrate_non_shared',
+                           [name, target])

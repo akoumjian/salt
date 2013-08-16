@@ -11,7 +11,7 @@ import os
 import glob
 import tempfile
 import time
-import shutil
+import logging
 
 # Import third party tools
 import yaml
@@ -19,6 +19,11 @@ import yaml
 # Import salt libs
 import salt.utils
 import salt.crypt
+
+
+# Set up logging
+log = logging.getLogger(__name__)
+
 
 def __virtual__():
     '''
@@ -34,22 +39,31 @@ def connect(image):
     Activate nbd for an image file.
 
     CLI Example::
-        
+
         salt '*' qemu_nbd.connect /tmp/image.raw
     '''
     if not os.path.isfile(image):
+        log.warning('Could not connect image: '
+                    '{0} does not exist'.format(image))
         return ''
+
+    if salt.utils.which('cfdisk'):
+        fdisk = 'cfdisk -P t'
+    else:
+        fdisk = 'fdisk -l'
     __salt__['cmd.run']('modprobe nbd max_part=63')
     for nbd in glob.glob('/dev/nbd?'):
-        if __salt__['cmd.retcode']('fdisk -l {0}'.format(nbd)):
+        if __salt__['cmd.retcode']('{0} {1}'.format(fdisk, nbd)):
             while True:
                 # Sometimes nbd does not "take hold", loop until we can verify
                 __salt__['cmd.run'](
                         'qemu-nbd -c {0} {1}'.format(nbd, image)
                         )
-                if not __salt__['cmd.retcode']('fdisk -l {0}'.format(nbd)):
+                if not __salt__['cmd.retcode']('{0} {1}'.format(fdisk, nbd)):
                     break
             return nbd
+    log.warning('Could not connect image: '
+                '{0}'.format(image))
     return ''
 
 
@@ -62,6 +76,9 @@ def mount(nbd):
 
         salt '*' qemu_nbd.mount /dev/nbd0
     '''
+    __salt__['cmd.run'](
+            'partprobe {0}'.format(nbd)
+            )
     ret = {}
     for part in glob.glob('{0}p*'.format(nbd)):
         root = os.path.join(
@@ -71,7 +88,7 @@ def mount(nbd):
         m_pt = os.path.join(root, os.path.basename(part))
         time.sleep(1)
         mnt = __salt__['mount.mount'](m_pt, part, True)
-        if not mnt is True:
+        if mnt is not True:
             continue
         ret[m_pt] = part
     return ret
@@ -95,7 +112,7 @@ def clear(mnt):
     '''
     Pass in the mnt dict returned from nbd_mount to unmount and disconnect
     the image from nbd. If all of the partitions are unmounted return an
-    empy dict, otherwise return a dict containing the still mounted
+    empty dict, otherwise return a dict containing the still mounted
     partitions
 
     CLI Example::
@@ -108,7 +125,7 @@ def clear(mnt):
     nbds = set()
     for m_pt, dev in mnt.items():
         mnt_ret = __salt__['mount.umount'](m_pt)
-        if not mnt_ret is True:
+        if mnt_ret is not True:
             ret[m_pt] = dev
         nbds.add(dev[:dev.rindex('p')])
     if ret:
@@ -116,5 +133,3 @@ def clear(mnt):
     for nbd in nbds:
         __salt__['cmd.run']('qemu-nbd -d {0}'.format(nbd))
     return ret
-
-

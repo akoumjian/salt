@@ -62,19 +62,20 @@ def assign(name, value):
 
         salt '*' sysctl.assign net.ipv4.ip_forward 1
     '''
+    value = str(value)
     sysctl_file = '/proc/sys/{0}'.format(name.replace('.', '/'))
     if not os.path.exists(sysctl_file):
         raise CommandExecutionError('sysctl {0} does not exist'.format(name))
 
-    ret  = {}
-    cmd  = 'sysctl -w {0}="{1}"'.format(name, value)
+    ret = {}
+    cmd = 'sysctl -w {0}="{1}"'.format(name, value)
     data = __salt__['cmd.run_all'](cmd)
-    out  = data['stdout']
+    out = data['stdout']
 
     # Example:
     #    # sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216"
     #    net.ipv4.tcp_rmem = 4096 87380 16777216
-    regex = re.compile('^{0}\s+=\s+{1}$'.format(name, value))
+    regex = re.compile(r'^{0}\s+=\s+{1}$'.format(re.escape(name), re.escape(value)))
 
     if not regex.match(out):
         if data['retcode'] != 0 and data['stderr']:
@@ -134,11 +135,11 @@ def persist(name, value, config='/etc/sysctl.conf'):
         # allow our users to put a space or tab between multi-value sysctls
         # and have salt not try to set it every single time.
         if isinstance(comps[1], string_types) and ' ' in comps[1]:
-            comps[1] = re.sub('\s+', '\t', comps[1])
+            comps[1] = re.sub(r'\s+', '\t', comps[1])
 
         # Do the same thing for the value 'just in case'
         if isinstance(value, string_types) and ' ' in value:
-            value = re.sub('\s+', '\t', value)
+            value = re.sub(r'\s+', '\t', value)
 
         if len(comps) < 2:
             nlines.append(line)
@@ -148,7 +149,7 @@ def persist(name, value, config='/etc/sysctl.conf'):
             if str(comps[1]) == str(value):
                 # It is correct in the config, check if it is correct in /proc
                 if name in running:
-                    if not str(running[name]) == str(value):
+                    if str(running[name]) != str(value):
                         assign(name, value)
                         return 'Updated'
                 return 'Already set'

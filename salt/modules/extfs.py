@@ -5,18 +5,17 @@ Module for managing ext2/3/4 file systems
 # Import python libs
 import logging
 
+# Import salt libs
+import salt.utils
+
 log = logging.getLogger(__name__)
 
 
 def __virtual__():
     '''
-    Only work on posix-like systems
+    Only work on POSIX-like systems
     '''
-    # Disable on these platorms, specific service modules exist:
-    disable = [
-        'Windows',
-        ]
-    if __grains__['os'] in disable:
+    if salt.utils.is_windows():
         return False
     return 'extfs'
 
@@ -57,7 +56,7 @@ def mkfs(device, fs_type, **kwargs):
         fs_type: set the filesystem type (REQUIRED)
         usage_type: how the filesystem is going to be used
         uuid: set the UUID for the file system
-        
+
         see man 8 mke2fs for a more complete description of these options
     '''
     kwarg_map = {'block_size': 'b',
@@ -84,14 +83,15 @@ def mkfs(device, fs_type, **kwargs):
                  'super': 'S',
                  'usage_type': 'T',
                  'uuid': 'U'}
-        
+
     opts = ''
-    for key in kwargs.keys():
-        opt = kwarg_map[key]
-        if kwargs[key] == 'True':
-            opts += '-{0} '.format(opt)
-        else:
-            opts += '-{0} {1} '.format(opt, kwargs[key])
+    for key in kwargs:
+        if key in kwarg_map:
+            opt = kwarg_map[key]
+            if kwargs[key] == 'True':
+                opts += '-{0} '.format(opt)
+            else:
+                opts += '-{0} {1} '.format(opt, kwargs[key])
     cmd = 'mke2fs -F -t {0} {1}{2}'.format(fs_type, opts, device)
     out = __salt__['cmd.run'](cmd).splitlines()
     ret = []
@@ -167,12 +167,13 @@ def tune(device, **kwargs):
                  'user': 'u',
                  'uuid': 'U'}
     opts = ''
-    for key in kwargs.keys():
-        opt = kwarg_map[key]
-        if kwargs[key] == 'True':
-            opts += '-{0} '.format(opt)
-        else:
-            opts += '-{0} {1} '.format(opt, kwargs[key])
+    for key in kwargs:
+        if key in kwarg_map:
+            opt = kwarg_map[key]
+            if kwargs[key] == 'True':
+                opts += '-{0} '.format(opt)
+            else:
+                opts += '-{0} {1} '.format(opt, kwargs[key])
     cmd = 'tune2fs {0}{1}'.format(opts, device)
     out = __salt__['cmd.run'](cmd).splitlines()
     return out
@@ -252,8 +253,8 @@ def dump(device, args=None):
                 ret['blocks'][group]['extra'] = []
             elif 'Free blocks:' in line:
                 comps = line.split(': ')
-                blocks = comps[1].split(', ')
-                ret['blocks'][group]['free blocks'] = blocks
+                free_blocks = comps[1].split(', ')
+                ret['blocks'][group]['free blocks'] = free_blocks
             elif 'Free inodes:' in line:
                 comps = line.split(': ')
                 inodes = comps[1].split(', ')
@@ -262,4 +263,3 @@ def dump(device, args=None):
                 line = line.strip()
                 ret['blocks'][group]['extra'].append(line)
     return ret
-

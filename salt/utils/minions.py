@@ -6,7 +6,6 @@ expected to return
 # Import python libs
 import os
 import glob
-import fnmatch
 import re
 import logging
 
@@ -15,13 +14,14 @@ import salt.payload
 
 log = logging.getLogger(__name__)
 
+
 def nodegroup_comp(group, nodegroups, skip=None):
     '''
     Take the nodegroup and the nodegroups and fill in nodegroup refs
     '''
     if skip is None:
         skip = set([group])
-    if not group in nodegroups:
+    if group not in nodegroups:
         return ''
     gstr = nodegroups[group]
     ret = ''
@@ -70,15 +70,12 @@ class CkMinions(object):
         '''
         Return the minions found by looking via regular expressions
         '''
-        ret = set()
         cwd = os.getcwd()
         os.chdir(os.path.join(self.opts['pki_dir'], 'minions'))
         reg = re.compile(expr)
-        for fn_ in os.listdir('.'):
-            if reg.match(fn_):
-                ret.add(fn_)
+        ret = [fn_ for fn_ in os.listdir('.') if reg.match(fn_)]
         os.chdir(cwd)
-        return list(ret)
+        return ret
 
     def _check_grain_minions(self, expr):
         '''
@@ -92,7 +89,7 @@ class CkMinions(object):
             if not os.path.isdir(cdir):
                 return list(minions)
             for id_ in os.listdir(cdir):
-                if not id_ in minions:
+                if id_ not in minions:
                     continue
                 datap = os.path.join(cdir, id_, 'data.p')
                 if not os.path.isfile(datap):
@@ -100,39 +97,8 @@ class CkMinions(object):
                 grains = self.serial.load(
                     salt.utils.fopen(datap)
                 ).get('grains')
-                comps = expr.rsplit(':', 1)
-                match = salt.utils.traverse_dict(grains, comps[0], {})
-                if len(comps) < 2:
-                    continue
-                if not match:
+                if not salt.utils.subdict_match(grains, expr):
                     minions.remove(id_)
-                    continue
-                if isinstance(match, dict):
-                    if comps[1] == '*':
-                        # We are just checking that the key exists
-                        continue 
-                    minions.remove(id_)
-                    continue
-                if isinstance(match, list):
-                    # We are matching a single component to a single list
-                    # member
-                    for member in match:
-                        if fnmatch.fnmatch(
-                                str(member).lower(), comps[1].lower()):
-                            break
-                    else:
-                        # Walked through ALL the members in the list and no
-                        # match?
-                        # Remove the minion id from the list of minions!
-                        minions.remove(id_)
-                    continue
-
-                if fnmatch.fnmatch(str(match.lower()), comps[1].lower()):
-                    continue
-
-                # Still no match!? Remove the minion id from the list
-                minions.remove(id_)
-
         return list(minions)
 
     def _check_grain_pcre_minions(self, expr):
@@ -145,7 +111,7 @@ class CkMinions(object):
             if not os.path.isdir(cdir):
                 return list(minions)
             for id_ in os.listdir(cdir):
-                if not id_ in minions:
+                if id_ not in minions:
                     continue
                 datap = os.path.join(cdir, id_, 'data.p')
                 if not os.path.isfile(datap):
@@ -153,36 +119,8 @@ class CkMinions(object):
                 grains = self.serial.load(
                     salt.utils.fopen(datap)
                 ).get('grains')
-                comps = expr.split(':')
-                if len(comps) < 2:
-                    continue
-                if comps[0] not in grains:
-                    minions.remove(id_)
-                if isinstance(grains[comps[0]], dict) and comps[1] == '*':
-                    # We are just checking that the key exists
-                    continue
-                if isinstance(grains[comps[0]], list):
-                    # We are matching a single component to a single list member
-                    found = False
-                    for member in grains[comps[0]]:
-                        try:
-                            if re.match(comps[1].lower(), str(member).lower()):
-                                found = True
-                        except Exception:
-                            log.error('Invalid Regex in grain match')
-                    if found:
-                        continue
-                    minions.remove(id_)
-                    continue
-                try:
-                    if re.match(
-                        comps[1].lower(),
-                        str(grains[comps[0]]).lower()
-                        ):
-                        continue
-                    else:
-                        minions.remove(id_)
-                except Exception:
+                if not salt.utils.subdict_match(grains, expr,
+                                                delim=':', regex_match=True):
                     minions.remove(id_)
         return list(minions)
 
@@ -232,8 +170,7 @@ class CkMinions(object):
                 'node',
                 'ipcidr',
                 'exsel',
-                'pillar',
-                ]
+                'pillar']
         if not self.opts.get('minion_data_cache', False):
             infinite.append('grain')
             infinite.append('grain_pcre')
@@ -248,13 +185,13 @@ class CkMinions(object):
         if v_matcher in infinite:
             # We can't be sure what the subset is, only match the identical
             # target
-            if not v_matcher == expr_form:
+            if v_matcher != expr_form:
                 return False
             return v_expr == expr
         v_minions = set(self.check_minions(v_expr, v_matcher))
         minions = set(self.check_minions(expr, expr_form))
-        d_bool = bool(minions.difference(v_minions))
-        if len(v_minions) == len(minions) and not d_bool:
+        d_bool = not bool(minions.difference(v_minions))
+        if len(v_minions) == len(minions) and d_bool:
             return True
         return d_bool
 
@@ -315,7 +252,7 @@ class CkMinions(object):
 
     def wheel_check(self, auth_list, fun):
         '''
-        Check special api permissions
+        Check special API permissions
         '''
         comps = fun.split('.')
         if len(comps) != 2:
@@ -327,6 +264,39 @@ class CkMinions(object):
                 if ind.startswith('@') and ind[1:] == mod:
                     return True
                 if ind == '@wheel':
+                    return True
+                if ind == '@wheels':
+                    return True
+            elif isinstance(ind, dict):
+                if len(ind) != 1:
+                    continue
+                valid = ind.keys()[0]
+                if valid.startswith('@') and valid[1:] == mod:
+                    if isinstance(ind[valid], str):
+                        if self.match_check(ind[valid], fun):
+                            return True
+                    elif isinstance(ind[valid], list):
+                        for regex in ind[valid]:
+                            if self.match_check(regex, fun):
+                                return True
+        return False
+
+    def runner_check(self, auth_list, fun):
+        '''
+        Check special API permissions
+        '''
+        comps = fun.split('.')
+        if len(comps) != 2:
+            return False
+        mod = comps[0]
+        fun = comps[1]
+        for ind in auth_list:
+            if isinstance(ind, str):
+                if ind.startswith('@') and ind[1:] == mod:
+                    return True
+                if ind == '@runners':
+                    return True
+                if ind == '@runner':
                     return True
             elif isinstance(ind, dict):
                 if len(ind) != 1:

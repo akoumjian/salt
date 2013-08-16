@@ -10,11 +10,15 @@ import stat
 import shutil
 import resource
 import tempfile
+import socket
 
-# Import Salt libs
+# Import Salt Testing libs
+from salttesting import skipIf, TestCase
+from salttesting.helpers import ensure_in_syspath, TestsLoggingHandler
+ensure_in_syspath('../../')
+
+# Import salt libs
 import salt.utils
-from saltunittest import skipIf, TestCase, TestsLoggingHandler
-
 from salt.utils.verify import (
     check_user,
     verify_env,
@@ -32,7 +36,7 @@ class TestVerify(TestCase):
     def test_zmq_verify(self):
         self.assertTrue(zmq_version())
 
-    def test_zmq_verify_insuficient(self):
+    def test_zmq_verify_insufficient(self):
         import zmq
         zmq.__version__ = '2.1.0'
         self.assertFalse(zmq_version())
@@ -75,6 +79,10 @@ class TestVerify(TestCase):
 
     def test_verify_socket(self):
         self.assertTrue(verify_socket('', 18000, 18001))
+        if socket.has_ipv6:
+            # Only run if Python is built with IPv6 support; otherwise
+            # this will just fail.
+            self.assertTrue(verify_socket('::', 18000, 18001))
 
     @skipIf(os.environ.get('TRAVIS_PYTHON_VERSION', None) is not None,
             'Travis environment does not like too many open files')
@@ -171,7 +179,7 @@ class TestVerify(TestCase):
                     handler.messages
                 )
                 handler.clear()
-            except IOError, err:
+            except IOError as err:
                 if err.errno == 24:
                     # Too many open files
                     self.skipTest('We\'ve hit the max open files setting')
@@ -179,3 +187,8 @@ class TestVerify(TestCase):
             finally:
                 shutil.rmtree(tempdir)
                 resource.setrlimit(resource.RLIMIT_NOFILE, (mof_s, mof_h))
+
+
+if __name__ == '__main__':
+    from integration import run_tests
+    run_tests(TestVerify, needs_daemon=False)

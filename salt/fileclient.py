@@ -19,13 +19,13 @@ from salt.exceptions import MinionError, SaltReqTimeoutError
 import salt.client
 import salt.crypt
 import salt.loader
-import salt.utils
 import salt.payload
 import salt.utils
 import salt.utils.templates
 import salt.utils.gzip_util
 from salt._compat import (
-    URLError, HTTPError, BaseHTTPServer, urlparse, url_open)
+    URLError, HTTPError, BaseHTTPServer, urlparse, urlunparse, url_open,
+    url_passwd_mgr, url_auth_handler, url_build_opener, url_install_opener)
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ class Client(object):
         '''
         raise NotImplementedError
 
-    def file_list_emptydirs(self, env='base'):
+    def file_list_emptydirs(self, env='base', prefix=''):
         '''
         List the empty dirs
         '''
@@ -121,6 +121,8 @@ class Client(object):
         minion file cache
         '''
         ret = []
+        if isinstance(paths, str):
+            paths = paths.split(',')
         for path in paths:
             ret.append(self.cache_file(path, env))
         return ret
@@ -140,34 +142,40 @@ class Client(object):
         '''
         ret = []
         path = self._check_proto(path)
+        # We want to make sure files start with this *directory*, use
+        # '/' explicitly because the master (that's generating the
+        # list of files) only runs on POSIX
+        if not path.endswith('/'):
+            path = path + '/'
+
         log.info(
             'Caching directory \'{0}\' for environment \'{1}\''.format(
                 path, env
             )
         )
-        for fn_ in self.file_list(env):
-            if fn_.startswith('{0}{1}'.format(path, os.path.sep)):
-                local = self.cache_file('salt://{0}'.format(fn_), env)
-                if not fn_.strip():
-                    continue
-                ret.append(local)
+        #go through the list of all files finding ones that are in
+        #the target directory and caching them
+        ret.extend([self.cache_file('salt://' + fn_, env)
+                    for fn_ in self.file_list(env)
+                    if fn_.strip() and fn_.startswith(path)])
 
         if include_empty:
-            # Break up the path into a list containing the bottom-level directory
-            # (the one being recursively copied) and the directories preceding it
+            # Break up the path into a list containing the bottom-level
+            # directory (the one being recursively copied) and the directories
+            # preceding it
             #separated = string.rsplit(path, '/', 1)
             #if len(separated) != 2:
-            #    # No slashes in path. (This means all files in env will be copied)
+            #    # No slashes in path. (So all files in env will be copied)
             #    prefix = ''
             #else:
             #    prefix = separated[0]
+            dest = salt.utils.path_join(
+                self.opts['cachedir'],
+                'files',
+                env
+            )
             for fn_ in self.file_list_emptydirs(env):
-                if fn_.startswith('{0}{1}'.format(path, os.path.sep)):
-                    dest = salt.utils.path_join(
-                        self.opts['cachedir'],
-                        'files',
-                        env
-                    )
+                if fn_.startswith(path):
                     minion_dir = '{0}/{1}'.format(dest, fn_)
                     if not os.path.isdir(minion_dir):
                         os.makedirs(minion_dir)
@@ -199,13 +207,13 @@ class Client(object):
         ldest = self._file_local_list(localfilesdest)
         return sorted(fdest.union(ldest))
 
-    def file_list(self, env='base'):
+    def file_list(self, env='base', prefix=''):
         '''
         This function must be overwritten
         '''
         return []
 
-    def dir_list(self, env='base'):
+    def dir_list(self, env='base', prefix=''):
         '''
         This function must be overwritten
         '''
@@ -237,7 +245,7 @@ class Client(object):
         for path in self.file_list(env):
             if path.endswith('.sls'):
                 # is an sls module!
-                if path.endswith('{0}init.sls'.format(os.sep)):
+                if path.endswith('{0}init.sls'.format('/')):
                     states.append(path.replace('/', '.')[:-9])
                 else:
                     states.append(path.replace('/', '.')[:-4])
@@ -250,12 +258,12 @@ class Client(object):
         '''
         if '.' in sls:
             sls = sls.replace('.', '/')
-        for path in ['salt://' + sls + '.sls',
-                     os.path.join('salt://', sls, 'init.sls')]:
+        for path in ['salt://{0}.sls'.format(sls),
+                     '/'.join(['salt:/', sls, 'init.sls'])]:
             dest = self.cache_file(path, env)
             if dest:
-                return dest
-        return False
+                return {'source': path, 'dest': dest}
+        return {}
 
     def get_dir(self, path, dest='', env='base', gzip=None):
         '''
@@ -277,6 +285,13 @@ class Client(object):
         # Copy files from master
         for fn_ in self.file_list(env):
             if fn_.startswith(path):
+                # Prevent files in "salt://foobar/" (or salt://foo.sh) from
+                # matching a path of "salt://foo"
+                try:
+                    if fn_[len(path)] != '/':
+                        continue
+                except IndexError:
+                    continue
                 # Remove the leading directories from path to derive
                 # the relative path on the minion.
                 minion_relpath = string.lstrip(fn_[len(prefix):], '/')
@@ -290,6 +305,13 @@ class Client(object):
         # Replicate empty dirs from master
         for fn_ in self.file_list_emptydirs(env):
             if fn_.startswith(path):
+                # Prevent an empty dir "salt://foobar/" from matching a path of
+                # "salt://foo"
+                try:
+                    if fn_[len(path)] != '/':
+                        continue
+                except IndexError:
+                    continue
                 # Remove the leading directories from path to derive
                 # the relative path on the minion.
                 minion_relpath = string.lstrip(fn_[len(prefix):], '/')
@@ -325,8 +347,19 @@ class Client(object):
             destdir = os.path.dirname(dest)
             if not os.path.isdir(destdir):
                 os.makedirs(destdir)
+        if url_data.username is not None:
+            _, netloc = url_data.netloc.split('@', 1)
+            fixed_url = urlunparse((url_data.scheme, netloc, url_data.path,
+                url_data.params, url_data.query, url_data.fragment))
+            passwd_mgr = url_passwd_mgr()
+            passwd_mgr.add_password(None, fixed_url, url_data.username, url_data.password)
+            auth_handler = url_auth_handler(passwd_mgr)
+            opener = url_build_opener(auth_handler)
+            url_install_opener(opener)
+        else:
+            fixed_url = url
         try:
-            with contextlib.closing(url_open(url)) as srcfp:
+            with contextlib.closing(url_open(fixed_url)) as srcfp:
                 with salt.utils.fopen(dest, 'wb') as destfp:
                     shutil.copyfileobj(srcfp, destfp)
             return dest
@@ -362,7 +395,6 @@ class Client(object):
         else:
             log.error('Attempted to render template with unavailable engine '
                       '{0}'.format(template))
-            salt.utils.safe_rm(data['data'])
             return ''
         if not data['result']:
             # Failed to render the template
@@ -407,6 +439,9 @@ class LocalClient(Client):
                'rel': ''}
         if env not in self.opts['file_roots']:
             return fnd
+        if path.startswith('|'):
+            # The path arguments are escaped
+            path = path[1:]
         for root in self.opts['file_roots'][env]:
             full = os.path.join(root, path)
             if os.path.isfile(full):
@@ -426,15 +461,17 @@ class LocalClient(Client):
             return ''
         return fnd['path']
 
-    def file_list(self, env='base'):
+    def file_list(self, env='base', prefix=''):
         '''
         Return a list of files in the given environment
+        with optional relative prefix path to limit directory traversal
         '''
         ret = []
         if env not in self.opts['file_roots']:
             return ret
+        prefix = prefix.strip('/')
         for path in self.opts['file_roots'][env]:
-            for root, dirs, files in os.walk(path, followlinks=True):
+            for root, dirs, files in os.walk(os.path.join(path, prefix), followlinks=True):
                 for fname in files:
                     ret.append(
                         os.path.relpath(
@@ -444,28 +481,32 @@ class LocalClient(Client):
                     )
         return ret
 
-    def file_list_emptydirs(self, env='base'):
+    def file_list_emptydirs(self, env='base', prefix=''):
         '''
         List the empty dirs in the file_roots
+        with optional relative prefix path to limit directory traversal
         '''
         ret = []
+        prefix = prefix.strip('/')
         if env not in self.opts['file_roots']:
             return ret
         for path in self.opts['file_roots'][env]:
-            for root, dirs, files in os.walk(path, followlinks=True):
+            for root, dirs, files in os.walk(os.path.join(path, prefix), followlinks=True):
                 if len(dirs) == 0 and len(files) == 0:
                     ret.append(os.path.relpath(root, path))
         return ret
 
-    def dir_list(self, env='base'):
+    def dir_list(self, env='base', prefix=''):
         '''
         List the dirs in the file_roots
+        with optional relative prefix path to limit directory traversal
         '''
         ret = []
         if env not in self.opts['file_roots']:
             return ret
+        prefix = prefix.strip('/')
         for path in self.opts['file_roots'][env]:
-            for root, dirs, files in os.walk(path, followlinks=True):
+            for root, dirs, files in os.walk(os.path.join(path, prefix), followlinks=True):
                 ret.append(os.path.relpath(root, path))
         return ret
 
@@ -498,7 +539,7 @@ class LocalClient(Client):
         ret['hash_type'] = self.opts['hash_type']
         return ret
 
-    def list_env(self, path, env='base'):
+    def list_env(self, env='base'):
         '''
         Return a list of the files in the file server's specified environment
         '''
@@ -557,7 +598,7 @@ class RemoteClient(Client):
         '''
         Get a single file from the salt-master
         path must be a salt server location, aka, salt://path/to/file, if
-        dest is ommited, then the downloaded file will be placed in the minion
+        dest is omitted, then the downloaded file will be placed in the minion
         cache
         '''
         log.info('Fetching file \'{0}\''.format(path))
@@ -599,9 +640,8 @@ class RemoteClient(Client):
                     # This is a 0 byte file on the master
                     with self._cache_loc(data['dest'], env) as cache_dest:
                         dest = cache_dest
-                        if not os.path.exists(cache_dest):
-                            with salt.utils.fopen(cache_dest, 'wb+') as ofile:
-                                ofile.write(data['data'])
+                        with salt.utils.fopen(cache_dest, 'wb+') as ofile:
+                            ofile.write(data['data'])
                 if 'hsum' in data and d_tries < 3:
                     # Master has prompted a file verification, if the
                     # verification fails, redownload the file. Try 3 times
@@ -633,11 +673,12 @@ class RemoteClient(Client):
             fn_.close()
         return dest
 
-    def file_list(self, env='base'):
+    def file_list(self, env='base', prefix=''):
         '''
         List the files on the master
         '''
         load = {'env': env,
+                'prefix': prefix,
                 'cmd': '_file_list'}
         try:
             return self.auth.crypticle.loads(
@@ -649,11 +690,12 @@ class RemoteClient(Client):
         except SaltReqTimeoutError:
             return ''
 
-    def file_list_emptydirs(self, env='base'):
+    def file_list_emptydirs(self, env='base', prefix=''):
         '''
         List the empty dirs on the master
         '''
         load = {'env': env,
+                'prefix': prefix,
                 'cmd': '_file_list_emptydirs'}
         try:
             return self.auth.crypticle.loads(
@@ -665,11 +707,12 @@ class RemoteClient(Client):
         except SaltReqTimeoutError:
             return ''
 
-    def dir_list(self, env='base'):
+    def dir_list(self, env='base', prefix=''):
         '''
         List the dirs on the master
         '''
         load = {'env': env,
+                'prefix': prefix,
                 'cmd': '_dir_list'}
         try:
             return self.auth.crypticle.loads(
@@ -713,7 +756,7 @@ class RemoteClient(Client):
         except SaltReqTimeoutError:
             return ''
 
-    def list_env(self, path, env='base'):
+    def list_env(self, env='base'):
         '''
         Return a list of the files in the file server's specified environment
         '''

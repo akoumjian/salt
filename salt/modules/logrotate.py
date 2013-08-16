@@ -13,13 +13,17 @@ log = logging.getLogger(__name__)
 default_conf = '/etc/logrotate.conf'
 
 
+# Define a function alias in order not to shadow built-in's
+__func_alias__ = {
+    'set_': 'set'
+}
+
+
 def __virtual__():
     '''
-    Only work on posix-like systems
+    Only work on POSIX-like systems
     '''
-    # Disable on these platorms
-    disable = ('Windows',)
-    if __grains__['os'] in disable:
+    if salt.utils.is_windows():
         return False
     return 'logrotate'
 
@@ -33,20 +37,20 @@ def _parse_conf(conf_file=default_conf):
     configs came from which includes will be stored in the 'include files' dict
     inside the return dict, for later reference by the user or module.
     '''
-    conf_path = os.path.dirname(conf_file)
     ret = {}
     mode = 'single'
     multi_name = ''
     multi = {}
     with salt.utils.fopen(conf_file, 'r') as ifile:
-        for line in ifile.readlines():
-            if not line.strip():
+        for line in ifile:
+            line = line.strip()
+            if not line:
                 continue
-            if line.strip().startswith('#'):
+            if line.startswith('#'):
                 continue
 
-            comps = line.strip().split()
-            if '{' in line and not '}' in line:
+            comps = line.split()
+            if '{' in line and '}' not in line:
                 mode = 'multi'
                 multi_name = comps[0]
                 continue
@@ -63,10 +67,10 @@ def _parse_conf(conf_file=default_conf):
                 key = multi
 
             if comps[0] == 'include':
-                if not 'include files' in ret:
+                if 'include files' not in ret:
                     ret['include files'] = {}
                 for include in os.listdir(comps[1]):
-                    if not include in ret['include files']:
+                    if include not in ret['include files']:
                         ret['include files'][include] = []
                     include_path = '{0}/{1}'.format(comps[1], include)
                     include_conf = _parse_conf(include_path)
@@ -92,7 +96,7 @@ def show_conf(conf_file=default_conf):
     return _parse_conf(conf_file)
 
 
-def set(key, value, setting=None, conf_file=default_conf):
+def set_(key, value, setting=None, conf_file=default_conf):
     '''
     Set a new value for a specific configuration line
 
@@ -121,12 +125,14 @@ def set(key, value, setting=None, conf_file=default_conf):
         if key in conf['include files'][include]:
             conf_file = os.path.join(conf['include'], include)
 
-    if type(conf[key]) is dict and not setting:
-        return ('Error: {0} includes a dict, and a specific setting inside the '
-                'dict was not declared'.format(key))
+    if isinstance(conf[key], dict) and not setting:
+        return (
+            'Error: {0} includes a dict, and a specific setting inside the '
+            'dict was not declared'.format(key)
+        )
 
     if setting:
-        if type(conf[key]) is str:
+        if isinstance(conf[key], str):
             return ('Error: A setting for a dict was declared, but the '
                     'configuration line given is not a dict')
         # We're going to be rewriting an entire stanza
@@ -170,4 +176,3 @@ def _dict_to_stanza(key, stanza):
             stanza[skey] = ''
         ret += '    {0} {1}\n'.format(skey, stanza[skey])
     return '{0} {{\n{1}}}'.format(key, ret)
-

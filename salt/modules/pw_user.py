@@ -10,9 +10,10 @@ except ImportError:
     pass
 import os
 import logging
-from copy import deepcopy
+import copy
 
-# From salt libs
+# Import salt libs
+import salt.utils
 from salt._compat import string_types
 
 log = logging.getLogger(__name__)
@@ -60,7 +61,6 @@ def add(name,
         home=True,
         shell=None,
         unique=True,
-        system=False,
         fullname='',
         roomnumber='',
         workphone='',
@@ -73,11 +73,14 @@ def add(name,
 
         salt '*' user.add name <uid> <gid> <groups> <home> <shell>
     '''
+    if salt.utils.is_true(kwargs.pop('system', False)):
+        log.warning('pw_user module does not support the \'system\' argument')
+    if kwargs:
+        log.warning('Invalid kwargs passed to user.add')
+
     if isinstance(groups, string_types):
         groups = groups.split(',')
     cmd = 'pw useradd '
-    if shell:
-        cmd += '-s {0} '.format(shell)
     if uid:
         cmd += '-u {0} '.format(uid)
     if gid:
@@ -89,6 +92,10 @@ def add(name,
             cmd += '-m '
         else:
             cmd += '-m -b {0} '.format(os.path.dirname(home))
+    if shell:
+        cmd += '-s {0} '.format(shell)
+    if not salt.utils.is_true(unique):
+        cmd += '-o '
     gecos_field = '{0},{1},{2},{3}'.format(fullname,
                                            roomnumber,
                                            workphone,
@@ -108,6 +115,9 @@ def delete(name, remove=False, force=False):
 
         salt '*' user.delete name remove=True force=True
     '''
+    if salt.utils.is_true(force):
+        log.error('pw userdel does not support force-deleting user while '
+                  'user is logged in')
     cmd = 'pw userdel '
     if remove:
         cmd += '-r '
@@ -118,7 +128,7 @@ def delete(name, remove=False, force=False):
     return not ret['retcode']
 
 
-def getent(user=None):
+def getent():
     '''
     Return the list of all info for all users
 
@@ -126,14 +136,13 @@ def getent(user=None):
 
         salt '*' user.getent
     '''
+    if 'user.getent' in __context__:
+        return __context__['user.getent']
+
     ret = []
     for data in pwd.getpwall():
         ret.append(info(data.pw_name))
-    if user:
-        try:
-            return [x for x in ret if x.get('name', '') == user][0]
-        except IndexError:
-            return {}
+    __context__['user.getent'] = ret
     return ret
 
 
@@ -186,7 +195,7 @@ def chshell(name, shell):
     pre_info = info(name)
     if shell == pre_info['shell']:
         return True
-    cmd = 'pw usermod -s {0} {1}'.format(shell, name)
+    cmd = 'pw usermod -s {0} -n {1}'.format(shell, name)
     __salt__['cmd.run'](cmd)
     post_info = info(name)
     if post_info['shell'] != pre_info['shell']:
@@ -251,7 +260,7 @@ def chfullname(name, fullname):
         return False
     if fullname == pre_info['fullname']:
         return True
-    gecos_field = deepcopy(pre_info)
+    gecos_field = copy.deepcopy(pre_info)
     gecos_field['fullname'] = fullname
     cmd = 'pw usermod {0} -c "{1}"'.format(name, _build_gecos(gecos_field))
     __salt__['cmd.run'](cmd)
@@ -275,7 +284,7 @@ def chroomnumber(name, roomnumber):
         return False
     if roomnumber == pre_info['roomnumber']:
         return True
-    gecos_field = deepcopy(pre_info)
+    gecos_field = copy.deepcopy(pre_info)
     gecos_field['roomnumber'] = roomnumber
     cmd = 'pw usermod {0} -c "{1}"'.format(name, _build_gecos(gecos_field))
     __salt__['cmd.run'](cmd)
@@ -299,7 +308,7 @@ def chworkphone(name, workphone):
         return False
     if workphone == pre_info['workphone']:
         return True
-    gecos_field = deepcopy(pre_info)
+    gecos_field = copy.deepcopy(pre_info)
     gecos_field['workphone'] = workphone
     cmd = 'pw usermod {0} -c "{1}"'.format(name, _build_gecos(gecos_field))
     __salt__['cmd.run'](cmd)
@@ -323,7 +332,7 @@ def chhomephone(name, homephone):
         return False
     if homephone == pre_info['homephone']:
         return True
-    gecos_field = deepcopy(pre_info)
+    gecos_field = copy.deepcopy(pre_info)
     gecos_field['homephone'] = homephone
     cmd = 'pw usermod {0} -c "{1}"'.format(name, _build_gecos(gecos_field))
     __salt__['cmd.run'](cmd)
@@ -361,17 +370,7 @@ def info(name):
         ret['workphone'] = gecos_field[2]
         ret['homephone'] = gecos_field[3]
     except KeyError:
-        ret['gid'] = ''
-        ret['groups'] = ''
-        ret['home'] = ''
-        ret['name'] = ''
-        ret['passwd'] = ''
-        ret['shell'] = ''
-        ret['uid'] = ''
-        ret['fullname'] = ''
-        ret['roomnumber'] = ''
-        ret['workphone'] = ''
-        ret['homephone'] = ''
+        return {}
     return ret
 
 
@@ -391,8 +390,16 @@ def list_groups(name):
         # The user's applied default group is undefined on the system, so
         # it does not exist
         pass
+
+    # If we already grabbed the group list, it's overkill to grab it again
+    if 'user.getgrall' in __context__:
+        groups = __context__['user.getgrall']
+    else:
+        groups = grp.getgrall()
+        __context__['user.getgrall'] = groups
+
     # Now, all other groups the user belongs to
-    for group in grp.getgrall():
+    for group in groups:
         if name in group.gr_mem:
             ugrp.add(group.gr_name)
     return sorted(list(ugrp))

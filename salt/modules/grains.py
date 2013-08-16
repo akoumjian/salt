@@ -1,5 +1,5 @@
 '''
-Control aspects of the grains data
+Return/control aspects of the grains data
 '''
 
 # Import python libs
@@ -48,18 +48,18 @@ _SANITIZERS = {
 
 def get(key, default=''):
     '''
-    Attempt to retrive the named value from grains, if the named value is not
+    Attempt to retrieve the named value from grains, if the named value is not
     available return the passed default. The default return is an empty string.
 
     The value can also represent a value in a nested dict using a ":" delimiter
-    for the dict. This means that if a dict in grains looks like this:
+    for the dict. This means that if a dict in grains looks like this::
 
-    {'pkg': {'apache': 'httpd'}}
+        {'pkg': {'apache': 'httpd'}}
 
-    To retrive the value associated with the apache key in the pkg dict this
-    key can be passed:
+    To retrieve the value associated with the apache key in the pkg dict this
+    key can be passed::
 
-    pkg:apache
+        pkg:apache
 
     CLI Example::
 
@@ -70,7 +70,7 @@ def get(key, default=''):
 
 def items(sanitize=False):
     '''
-    Return the grains data
+    Return all of the minion's grains
 
     CLI Example::
 
@@ -80,7 +80,7 @@ def items(sanitize=False):
 
         salt '*' grains.items sanitize=True
     '''
-    if sanitize:
+    if salt.utils.is_true(sanitize):
         out = dict(__grains__)
         for key, func in _SANITIZERS.items():
             if key in out:
@@ -90,18 +90,13 @@ def items(sanitize=False):
         return __grains__
 
 
-def item(*args, **kargs):
+def item(*args, **kwargs):
     '''
-    Return a single component of the grains data
+    Return one or more grains
 
     CLI Example::
 
         salt '*' grains.item os
-
-    Return multiple components of the grains data
-
-    CLI Example::
-
         salt '*' grains.item os osrelease oscodename
 
     Sanitized CLI Example::
@@ -109,16 +104,16 @@ def item(*args, **kargs):
         salt '*' grains.item host sanitize=True
     '''
     ret = {}
-    for k in args:
-        if k in __grains__:
-            ret[k] = __grains__[k]
-    if 'sanitize' in kargs:
-        for k, func in _SANITIZERS.items():
-            if k in ret:
-                ret[k] = func(ret[k])
-        return ret
-    else:
-        return ret
+    for arg in args:
+        try:
+            ret[arg] = __grains__[arg]
+        except KeyError:
+            pass
+    if salt.utils.is_true(kwargs.get('sanitize')):
+        for arg, func in _SANITIZERS.items():
+            if arg in ret:
+                ret[arg] = func(ret[arg])
+    return ret
 
 
 def setval(key, val):
@@ -128,6 +123,7 @@ def setval(key, val):
     CLI Example::
 
         salt '*' grains.setval key val
+        salt '*' grains.setval key '{'sub-key': 'val', 'sub-key2': 'val2'}'
     '''
     grains = {}
     if os.path.isfile(__opts__['conf_file']):
@@ -140,26 +136,85 @@ def setval(key, val):
             __opts__['conf_file'],
             'grains'
         )
+    else:
+        gfn = os.path.join(
+            os.path.dirname(__opts__['conf_file']),
+            'grains'
+        )
+
     if os.path.isfile(gfn):
-        with open(gfn, 'rb') as fp_:
+        with salt.utils.fopen(gfn, 'rb') as fp_:
             try:
                 grains = yaml.safe_load(fp_.read())
-            except Exception, e:
+            except Exception as e:
                 return 'Unable to read existing grains file: {0}'.format(e)
         if not isinstance(grains, dict):
             grains = {}
     grains[key] = val
     cstr = yaml.safe_dump(grains, default_flow_style=False)
-    with open(gfn, 'w+') as fp_:
+    with salt.utils.fopen(gfn, 'w+') as fp_:
         fp_.write(cstr)
     fn_ = os.path.join(__opts__['cachedir'], 'module_refresh')
-    with open(fn_, 'w+') as fp_:
+    with salt.utils.fopen(fn_, 'w+') as fp_:
         fp_.write('')
+    # Sync the grains
+    __salt__['saltutil.sync_grains']()
     # Return the grain we just set to confirm everything was OK
     return {key: val}
 
 
-def ls():  # pylint: disable-msg=C0103
+def append(key, val):
+    '''
+    .. versionadded:: 0.17.0
+
+    Append a value to a list in the grains config file
+
+    CLI Example::
+
+        salt '*' grains.append key val
+    '''
+    grains = get(key, [])
+    if not isinstance(grains, list):
+        return 'The key {0} is not a valid list'.format(key)
+    if val in grains:
+        return 'The val {0} was already in the list {1}'.format(val, key)
+    grains.append(val)
+    return setval(key, grains)
+
+
+def remove(key, val):
+    '''
+    .. versionadded:: 0.17.0
+
+    Remove a value from a list in the grains config file
+
+    CLI Example::
+
+        salt '*' grains.remove key val
+    '''
+    grains = get(key, [])
+    if not isinstance(grains, list):
+        return 'The key {0} is not a valid list'.format(key)
+    if val not in grains:
+        return 'The val {0} was not in the list {1}'.format(val, key)
+    grains.remove(val)
+    return setval(key, grains)
+
+
+def delval(key):
+    '''
+    .. versionadded:: 0.17.0
+
+    Delete a grain from the grains config file
+
+    CLI Example::
+
+        salt '*' grains.delval key
+    '''
+    setval(key, None)
+
+
+def ls():  # pylint: disable=C0103
     '''
     Return a list of all available grains
 
@@ -168,3 +223,34 @@ def ls():  # pylint: disable-msg=C0103
         salt '*' grains.ls
     '''
     return sorted(__grains__)
+
+
+def filter_by(lookup_dict, grain='os_family'):
+    '''
+    .. versionadded:: 0.17.0
+
+    Look up the given grain in a given dictionary for the current OS and return
+    the result
+
+    Although this may occasionally be useful at the CLI, the primary intent of
+    this function is for use in Jinja to make short work of creating lookup
+    tables for OS-specific data. For example:
+
+    .. code-block:: jinja
+
+        {% set pkg_table = {
+            'Debian': {'name': 'apache2'},
+            'RedHat': {'name': 'httpd'},
+        } %}
+        {% set pkg = salt['grains.filter_by'](pkg_table) %}
+
+        myapache:
+          pkg:
+            - installed
+            - name: {{ pkg.name }}
+
+    CLI Example::
+
+        salt '*' grains.filter_by '{Debian: Debheads rule, RedHat: I love my hat}'
+    '''
+    return lookup_dict.get(__grains__[grain], None)

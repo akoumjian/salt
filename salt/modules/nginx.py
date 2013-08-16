@@ -4,14 +4,16 @@ Support for nginx
 
 # Import salt libs
 import salt.utils
+import salt.utils.decorators as decorators
 
 
 # Cache the output of running which('nginx') so this module
 # doesn't needlessly walk $PATH looking for the same binary
 # for nginx over and over and over for each function herein
-@salt.utils.memoize
+@decorators.memoize
 def __detect_os():
     return salt.utils.which('nginx')
+
 
 def __virtual__():
     '''
@@ -20,6 +22,7 @@ def __virtual__():
     if __detect_os():
         return 'nginx'
     return False
+
 
 def version():
     '''
@@ -34,24 +37,40 @@ def version():
     ret = out[0].split(': ')
     return ret[-1]
 
+
+def configtest():
+    '''
+    test configuration and exit
+
+    CLI Example::
+
+        salt '*' nginx.configtest
+    '''
+
+    cmd = '{0} -t'.format(__detect_os())
+    out = __salt__['cmd.run'](cmd).splitlines()
+    ret = out[0].split(': ')
+    return ret[-1]
+
+
 def signal(signal=None):
     '''
-    Signals nginx to start, restart, or stop.
+    Signals nginx to start, reload, reopen or stop.
 
     CLI Example::
 
         salt '*' nginx.signal reload
     '''
-    valid_signals = ('reopen', 'stop', 'quit', 'reload')
+    valid_signals = ('start', 'reopen', 'stop', 'quit', 'reload')
 
     if signal not in valid_signals:
         return
 
     # Make sure you use the right arguments
-    if signal in valid_signals:
-        arguments = ' -s {0}'.format(signal)
+    if signal == "start":
+        arguments = ''
     else:
-        arguments = ' {0}'.format(signal)
+        arguments = ' -s {0}'.format(signal)
     cmd = __detect_os() + arguments
     out = __salt__['cmd.run_all'](cmd)
 

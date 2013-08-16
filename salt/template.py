@@ -57,6 +57,10 @@ def compile_template(template, renderers, default, env='', sls='', **kwargs):
 
     input_data = string_io(input_data)
     for render, argline in render_pipe:
+        try:
+            input_data.seek(0)
+        except Exception:
+            pass
         render_kwargs = dict(renderers=renderers, tmplpath=template)
         render_kwargs.update(kwargs)
         if argline:
@@ -67,6 +71,14 @@ def compile_template(template, renderers, default, env='', sls='', **kwargs):
             time.sleep(0.01)
             ret = render(input_data, env, sls, **render_kwargs)
         input_data = ret
+        if log.isEnabledFor(logging.GARBAGE):
+            try:
+                log.debug('Rendered data from file: {0}:\n{1}'.format(
+                    template,
+                    ret.read()))
+                ret.seek(0)
+            except Exception:
+                pass
     return ret
 
 

@@ -7,6 +7,7 @@ import os
 
 # Import salt libs
 import salt.utils
+import salt.utils.decorators as decorators
 from salt.exceptions import CommandExecutionError
 
 
@@ -14,13 +15,12 @@ def __virtual__():
     '''
     Only load the module if grub is installed
     '''
-    conf = _detect_conf()
-    if os.path.exists(conf):
+    if os.path.exists(_detect_conf()):
         return 'grub'
     return False
 
 
-@salt.utils.memoize
+@decorators.memoize
 def _detect_conf():
     '''
     GRUB conf location differs depending on distro
@@ -54,7 +54,7 @@ def conf():
     '''
     stanza = ''
     stanzas = []
-    instanza = 0
+    in_stanza = False
     ret = {}
     pos = 0
     try:
@@ -63,7 +63,7 @@ def conf():
                 if line.startswith('#'):
                     continue
                 if line.startswith('\n'):
-                    instanza = 0
+                    in_stanza = False
                     if 'title' in stanza:
                         stanza += 'order {0}'.format(pos)
                         pos += 1
@@ -71,13 +71,13 @@ def conf():
                     stanza = ''
                     continue
                 if line.startswith('title'):
-                    instanza = 1
-                if instanza == 1:
+                    in_stanza = True
+                if in_stanza:
                     stanza += line
-                if instanza == 0:
+                if not in_stanza:
                     key, value = _parse_line(line)
                     ret[key] = value
-            if instanza == 1:
+            if in_stanza:
                 if not line.endswith('\n'):
                     line += '\n'
                 stanza += line

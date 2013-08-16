@@ -11,6 +11,9 @@ for the generation and signing of certificates for systems running libvirt:
 # Import python libs
 import os
 
+# Import salt libs
+import salt.utils
+
 
 def keys(name, basepath='/etc/pki'):
     '''
@@ -59,13 +62,13 @@ def keys(name, basepath='/etc/pki'):
                 'cacert.pem')}
     for key in paths:
         p_key = 'libvirt.{0}.pem'.format(key)
-        if not p_key in pillar:
+        if p_key not in pillar:
             continue
         if not os.path.isdir(os.path.dirname(paths[key])):
             os.makedirs(os.path.dirname(paths[key]))
         if os.path.isfile(paths[key]):
-            with open(paths[key], 'r') as fp_:
-                if not fp_.read() == pillar[p_key]:
+            with salt.utils.fopen(paths[key], 'r') as fp_:
+                if fp_.read() != pillar[p_key]:
                     ret['changes'][key] = 'update'
         else:
             ret['changes'][key] = 'new'
@@ -78,7 +81,7 @@ def keys(name, basepath='/etc/pki'):
         ret['changes'] = {}
         return ret
     for key in ret['changes']:
-        with open(paths[key], 'w+') as fp_:
+        with salt.utils.fopen(paths[key], 'w+') as fp_:
             fp_.write(pillar['libvirt.{0}.pem'.format(key)])
     ret['comment'] = 'Updated libvirt certs and keys'
     return ret

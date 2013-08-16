@@ -12,6 +12,16 @@ and fast enough to communicate with them in *seconds*.
 Salt delivers a dynamic communication bus for infrastructures that can be used
 for orchestration, remote execution, configuration management and much more.
 
+.. seealso:: Offline documentation
+
+    Download a copy of the Salt documentation:
+
+    * `PDF`_
+    * `ePub`_
+
+.. _`PDF`: https://media.readthedocs.org/pdf/salt/latest/salt.pdf
+.. _`ePub`: https://media.readthedocs.org/epub/salt/latest/salt.epub
+
 Download
 ========
 
@@ -44,6 +54,7 @@ States - Configuration Management with Salt:
     - :doc:`Basic config management <topics/tutorials/states_pt1>`
     - :doc:`Less basic config management <topics/tutorials/states_pt2>`
     - :doc:`Advanced techniques <topics/tutorials/states_pt3>`
+    - :doc:`Salt Fileserver Path Inheritance <topics/tutorials/states_pt4>`
 
 Masterless Quickstart:
     :doc:`Salt Quickstart </topics/tutorials/quickstart>`
@@ -125,6 +136,9 @@ simultaneous configuration of tens of thousands of hosts.
         Install packages, create users, transfer files, start services, and
         much more.
 
+    :doc:`Pillar System <topics/pillar/index>`
+        Salt's Pillar system
+
     :doc:`States Overview<ref/states/index>`
         An overview of States and some of the core components.
 
@@ -188,7 +202,7 @@ Salt is many splendid things.
 :doc:`Testing Salt <topics/tests/index>`
     A howto for writing unit tests and integration tests.
 
-:doc:`Python API interface <ref/python-api>`
+:ref:`Python API interface <python-api>`
     Use Salt programmatically from scripts and programs easily and
     simply via ``import salt``.
 

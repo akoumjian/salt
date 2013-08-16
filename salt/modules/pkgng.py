@@ -75,7 +75,7 @@ available_version = latest_version
 
 def update_package_site(new_url):
     '''
-    Updates remote package repo url, PACKAGESITE var to be exact.
+    Updates remote package repo URL, PACKAGESITE var to be exact.
 
     Must be using http://, ftp://, or https// protos
 
@@ -145,6 +145,8 @@ def backup(file_name):
 def restore(file_name):
     '''
     Reads archive created by pkg backup -d and recreates the database.
+
+    CLI Example::
 
         salt '*' pkgng.restore /tmp/pkg
     '''
@@ -299,12 +301,12 @@ def install(pkg_name, orphan=False, force=False, glob=False, local=False,
     if repo_opts:
         repo_opts = '-' + repo_opts
 
-    cmd = 'pkg install {0} {1} {2}'.format(repo_opts,opts,pkg_name)
+    cmd = 'pkg install {0} {1} {2}'.format(repo_opts, opts, pkg_name)
     return __salt__['cmd.run'](cmd)
 
 
 def delete(pkg_name, all_installed=False, force=False, glob=False,
-            dryrun=False, recurse=False, regex=False, pcre=False):
+           dryrun=False, recurse=False, regex=False, pcre=False):
     '''
     Delete a package from the database and system
 
@@ -385,7 +387,7 @@ def delete(pkg_name, all_installed=False, force=False, glob=False,
     if opts:
         opts = '-' + opts
 
-    cmd = 'pkg delete {0} {1}'.format(opts,pkg_name)
+    cmd = 'pkg delete {0} {1}'.format(opts, pkg_name)
     return __salt__['cmd.run'](cmd)
 
 
@@ -428,7 +430,7 @@ def update(force=False):
 
                 salt '*' pkgng.update force=True
     '''
-    opts =''
+    opts = ''
     if force:
         opts += 'f'
     if opts:
@@ -470,7 +472,6 @@ def upgrade(force=False, local=False, dryrun=False):
 
                 salt '*' pkgng.update dryrun=True
     '''
-
     opts = ''
     if force:
         opts += 'f'
@@ -503,19 +504,16 @@ def clean():
 def autoremove(dryrun=False):
     '''
     Delete packages which were automatically installed as dependencies and are
-    not required anymore
-
-    CLI Example::
-
-	    salt '*' pkgng.autoremove
+    not required anymore.
 
         dryrun
             Dry-run mode. The list of changes to packages is always printed,
             but no changes are actually made.
 
-            CLI Example::
+    CLI Example::
 
-                salt '*' pkgng.autoremove dryrun=True
+         salt '*' pkgng.autoremove
+         salt '*' pkgng.autoremove dryrun=True
     '''
 
     opts = ''
@@ -606,8 +604,8 @@ def which(file_name, origin=False, quiet=False):
 
 
 def search(pkg_name, exact=False, glob=False, regex=False, pcre=False,
-            comment=False, desc=False, full=False, depends=False,
-            size=False, quiet=False, origin=False, prefix=False, ):
+           comment=False, desc=False, full=False, depends=False,
+           size=False, quiet=False, origin=False, prefix=False):
     '''
     Searches in remote package repositories
 
@@ -729,12 +727,12 @@ def search(pkg_name, exact=False, glob=False, regex=False, pcre=False,
     if opts:
         opts = '-' + opts
 
-    cmd = 'pkg search {0} {1}'.format(opts,pkg_name)
+    cmd = 'pkg search {0} {1}'.format(opts, pkg_name)
     return __salt__['cmd.run'](cmd)
 
 
 def fetch(pkg_name, all=False, quiet=False, reponame=None, glob=True,
-            regex=False, pcre=False, local=False, depends=False):
+          regex=False, pcre=False, local=False, depends=False):
     '''
     Fetches remote packages
 
@@ -824,7 +822,7 @@ def fetch(pkg_name, all=False, quiet=False, reponame=None, glob=True,
     if repo_opts:
         opts = '-' + repo_opts
 
-    cmd = 'pkg fetch -y {0} {1} {2}'.format(repo_opts,opts,pkg_name)
+    cmd = 'pkg fetch -y {0} {1} {2}'.format(repo_opts, opts, pkg_name)
     return __salt__['cmd.run'](cmd)
 
 
@@ -859,31 +857,5 @@ def updating(pkg_name, filedate=None, filename=None):
     if opts:
         opts = '-' + opts
 
-    cmd = 'pkg updating {0} {1}'.format(opts,pkg_name)
+    cmd = 'pkg updating {0} {1}'.format(opts, pkg_name)
     return __salt__['cmd.run'](cmd)
-
-
-def perform_cmp(pkg1='', pkg2=''):
-    '''
-    Do a cmp-style comparison on two packages. Return -1 if pkg1 < pkg2, 0 if
-    pkg1 == pkg2, and 1 if pkg1 > pkg2. Return None if there was a problem
-    making the comparison.
-
-    CLI Example::
-
-        salt '*' pkg.perform_cmp '0.2.4-0' '0.2.4.1-0'
-        salt '*' pkg.perform_cmp pkg1='0.2.4-0' pkg2='0.2.4.1-0'
-    '''
-    return __salt__['pkg_resource.perform_cmp'](pkg1=pkg1, pkg2=pkg2)
-
-
-def compare(pkg1='', oper='==', pkg2=''):
-    '''
-    Compare two version strings.
-
-    CLI Example::
-
-        salt '*' pkg.compare '0.2.4-0' '<' '0.2.4.1-0'
-        salt '*' pkg.compare pkg1='0.2.4-0' oper='<' pkg2='0.2.4.1-0'
-    '''
-    return __salt__['pkg_resource.compare'](pkg1=pkg1, oper=oper, pkg2=pkg2)

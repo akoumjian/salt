@@ -44,7 +44,10 @@ def top(num_processes=5, interval=3):
     result = []
     start_usage = {}
     for pid in psutil.get_pid_list():
-        process = psutil.Process(pid)
+        try:
+            process = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            continue
         user, system = process.get_cpu_times()
         start_usage[process] = user + system
     time.sleep(interval)
@@ -100,9 +103,7 @@ def cpu_percent(interval=0.1, per_cpu=False):
         salt '*' ps.cpu_percent
     '''
     if per_cpu:
-        result = []
-        for cpu_percent in psutil.cpu_percent(interval, True):
-            result.append(cpu_percent)
+        result = list(psutil.cpu_percent(interval, True))
     else:
         result = psutil.cpu_percent(interval)
     return result
@@ -122,9 +123,7 @@ def cpu_times(per_cpu=False):
         salt '*' ps.cpu_times
     '''
     if per_cpu:
-        result = []
-        for cpu_times in psutil.cpu_times(True):
-            result.append(dict(cpu_times._asdict()))
+        result = [dict(times._asdict()) for times in psutil.cpu_times(True)]
     else:
         result = dict(psutil.cpu_times(per_cpu)._asdict())
     return result
@@ -188,9 +187,7 @@ def disk_partitions(all=False):
 
         salt '*' ps.disk_partitions
     '''
-    result = []
-    for partition in psutil.disk_partitions(all):
-        result.append(dict(partition._asdict()))
+    result = [dict(partition._asdict()) for partition in psutil.disk_partitions(all)]
     return result
 
 

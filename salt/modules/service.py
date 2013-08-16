@@ -6,49 +6,62 @@ to this basic module
 # Import python libs
 import os
 
-# Import salt libs
-import salt.utils
-
+__func_alias__ = {
+    'reload_': 'reload'
+}
 
 GRAINMAP = {
-           'Arch': '/etc/rc.d',
-           'Debian': '/etc/init.d',
-           'Fedora': '/etc/init.d',
-           'RedHat': '/etc/init.d',
-           'Ubuntu': '/etc/init.d',
-           'Gentoo': '/etc/init.d',
-           'CentOS': '/etc/init.d',
-           'CloudLinux': '/etc/init.d',
-           'Amazon': '/etc/init.d',
-           'SunOS': '/etc/init.d',
-           'SUSE  Enterprise Server': '/etc/init.d',
-           'OEL': '/etc/init.d',
-          }
+    'Arch': '/etc/rc.d',
+    'Arch ARM': '/etc/rc.d',
+    'Debian': '/etc/init.d',
+    'Fedora': '/etc/init.d',
+    'RedHat': '/etc/init.d',
+    'Ubuntu': '/etc/init.d',
+    'Gentoo': '/etc/init.d',
+    'CentOS': '/etc/init.d',
+    'CloudLinux': '/etc/init.d',
+    'Amazon': '/etc/init.d',
+    'SunOS': '/etc/init.d',
+    'SUSE  Enterprise Server': '/etc/init.d',
+    'openSUSE': '/etc/init.d',
+    'OEL': '/etc/init.d',
+}
+
 
 def __virtual__():
     '''
-    Only work on systems which default to systemd
+    Only work on systems which exclusively use sysvinit
     '''
     # Disable on these platforms, specific service modules exist:
-    disable = [
-               'RedHat',
-               'CentOS',
-               'Amazon',
-               'Scientific',
-               'CloudLinux',
-               'Fedora',
-               'Gentoo',
-               'Ubuntu',
-               'Debian',
-               'Arch',
-               'ALT',
-               'OEL',
-              ]
-    if __grains__['os'] in disable:
+    disable = set((
+        'RedHat',
+        'CentOS',
+        'Amazon',
+        'Scientific',
+        'CloudLinux',
+        'Fedora',
+        'Gentoo',
+        'Ubuntu',
+        'Debian',
+        'Arch',
+        'Arch ARM',
+        'ALT',
+        'SUSE  Enterprise Server',
+        'OEL',
+        'Linaro',
+    ))
+    if __grains__.get('os', '') in disable:
         return False
     # Disable on all non-Linux OSes as well
     if __grains__['kernel'] != 'Linux':
         return False
+    # Suse >=12.0 uses systemd
+    if __grains__.get('os', '') == 'openSUSE':
+        try:
+            if int(__grains__.get('osrelease', '').split('.')[0]) >= 12:
+                return False
+        except ValueError:
+            return False
     return 'service'
 
 
@@ -104,7 +117,7 @@ def status(name, sig=None):
     return __salt__['status.pid'](sig if sig else name)
 
 
-def reload(name):
+def reload_(name):
     '''
     Restart the specified service
 
@@ -123,7 +136,7 @@ def get_all():
 
     CLI Example::
 
-        salt '*' service.get_al
+        salt '*' service.get_all
     '''
     if not os.path.isdir(GRAINMAP[__grains__['os']]):
         return []

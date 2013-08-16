@@ -26,20 +26,28 @@ Full list of builtin execution modules
     augeas_cfg
     bluez
     brew
-    butterkvm
+    bridge
+    bsd_shadow
     cassandra
     cmdmod
     config
     cp
     cron
     daemontools
+    darwin_sysctl
     data
+    ddns
     debconfmod
     debian_service
+    dig
     disk
     djangomod
+    dnsmasq
+    dnsutil
+    dpkg
     ebuild
     eix
+    eselect
     event
     extfs
     file
@@ -56,30 +64,42 @@ Full list of builtin execution modules
     grains
     groupadd
     grub_legacy
+    guestfs
     hg
     hosts
+    img
     iptables
     keyboard
+    key
     keystone
     kmod
-    kvm_hyper
     launchctl
     layman
     ldapmod
     linux_acl
     linux_lvm
     linux_sysctl
-    locale
+    localemod
+    locate
+    logrotate
     makeconf
+    match
     mdadm
+    mine
+    modjk
     mongodb
     monit
     moosefs
     mount
+    munin
     mysql
+    netbsdservice
+    netbsd_sysctl
     network
+    nfs3
     nginx
     nova
+    npm
     nzbget
     openbsdpkg
     openbsdservice
@@ -90,9 +110,11 @@ Full list of builtin execution modules
     pecl
     pillar
     pip
+    pkgin
     pkgng
     pkg_resource
     pkgutil
+    portage_config
     postgres
     poudriere
     ps
@@ -100,16 +122,24 @@ Full list of builtin execution modules
     puppet
     pw_group
     pw_user
+    qemu_img
+    qemu_nbd
+    quota
     rabbitmq
+    rbenv
     reg
     ret
     rh_ip
     rh_service
+    rpm
     rvm
+    s3
     saltutil
     selinux
     service
     shadow
+    smartos_imgadm
+    smartos_vmadm
     smf
     solaris_group
     solarispkg
@@ -125,6 +155,7 @@ Full list of builtin execution modules
     sysbench
     sysmod
     systemd
+    system
     test
     timezone
     tls
@@ -132,7 +163,7 @@ Full list of builtin execution modules
     upstart
     useradd
     virt
-    virtualenv
+    virtualenv_mod
     win_disk
     win_file
     win_groupadd
@@ -141,8 +172,11 @@ Full list of builtin execution modules
     win_service
     win_shadow
     win_status
+    win_system
     win_useradd
+    xapi
     yumpkg5
     yumpkg
+    zfs
     zpool
     zypper

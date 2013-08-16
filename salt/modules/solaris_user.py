@@ -12,6 +12,7 @@ import logging
 from copy import deepcopy
 
 # Import salt libs
+import salt.utils
 from salt._compat import string_types
 
 log = logging.getLogger(__name__)
@@ -57,14 +58,15 @@ def add(name,
         uid=None,
         gid=None,
         groups=None,
-        home=True,
+        home=None,
         shell=None,
         unique=True,
-        system=False,
         fullname='',
         roomnumber='',
         workphone='',
-        homephone=''):
+        homephone='',
+        createhome=True,
+        **kwargs):
     '''
     Add a user to the minion
 
@@ -72,6 +74,12 @@ def add(name,
 
         salt '*' user.add name <uid> <gid> <groups> <home> <shell>
     '''
+    if salt.utils.is_true(kwargs.pop('system', False)):
+        log.warning('solaris_user module does not support the \'system\' '
+                    'argument')
+    if kwargs:
+        log.warning('Invalid kwargs passed to user.add')
+
     if isinstance(groups, string_types):
         groups = groups.split(',')
     cmd = 'useradd '
@@ -83,15 +91,16 @@ def add(name,
         cmd += '-g {0} '.format(gid)
     if groups:
         cmd += '-G {0} '.format(','.join(groups))
-    if home:
-        if home is not True:
-            if system:
-                cmd += '-d {0} '.format(home)
-            else:
-                cmd += '-m -d {0} '.format(home)
+
+    if home is None:
+        if createhome:
+            cmd += '-m '
+    else:
+        if createhome:
+            cmd += '-m -d {0} '.format(home)
         else:
-            if not system:
-                cmd += '-m '
+            cmd += '-d {0} '.format(home)
+
     if not unique:
         cmd += '-o '
     cmd += name
@@ -126,6 +135,9 @@ def delete(name, remove=False, force=False):
 
         salt '*' user.delete name remove=True force=True
     '''
+    if salt.utils.is_true(force):
+        log.error('userdel does not support force-deleting user while '
+                  'user is logged in')
     cmd = 'userdel '
     if remove:
         cmd += '-r '
@@ -136,7 +148,7 @@ def delete(name, remove=False, force=False):
     return not ret['retcode']
 
 
-def getent(user=None):
+def getent():
     '''
     Return the list of all info for all users
 
@@ -144,14 +156,13 @@ def getent(user=None):
 
         salt '*' user.getent
     '''
+    if 'user.getent' in __context__:
+        return __context__['user.getent']
+
     ret = []
     for data in pwd.getpwall():
         ret.append(info(data.pw_name))
-    if user:
-        try:
-            ret = [x for x in ret if x.get('name', '') == user][0]
-        except IndexError:
-            ret = {}
+    __context__['user.getent'] = ret
     return ret
 
 
@@ -379,17 +390,7 @@ def info(name):
         ret['workphone'] = gecos_field[2]
         ret['homephone'] = gecos_field[3]
     except KeyError:
-        ret['gid'] = ''
-        ret['groups'] = ''
-        ret['home'] = ''
-        ret['name'] = ''
-        ret['passwd'] = ''
-        ret['shell'] = ''
-        ret['uid'] = ''
-        ret['fullname'] = ''
-        ret['roomnumber'] = ''
-        ret['workphone'] = ''
-        ret['homephone'] = ''
+        return {}
     return ret
 
 
@@ -404,8 +405,16 @@ def list_groups(name):
     ugrp = set()
     # Add the primary user's group
     ugrp.add(grp.getgrgid(pwd.getpwnam(name).pw_gid).gr_name)
+
+    # If we already grabbed the group list, it's overkill to grab it again
+    if 'user.getgrall' in __context__:
+        groups = __context__['user.getgrall']
+    else:
+        groups = grp.getgrall()
+        __context__['user.getgrall'] = groups
+
     # Now, all other groups the user belongs to
-    for group in grp.getgrall():
+    for group in groups:
         if name in group.gr_mem:
             ugrp.add(group.gr_name)
 

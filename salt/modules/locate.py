@@ -5,18 +5,17 @@ Module for using the locate utilities
 # Import python libs
 import logging
 
+# Import salt libs
+import salt.utils
+
 log = logging.getLogger(__name__)
 
 
 def __virtual__():
     '''
-    Only work on posix-like systems
+    Only work on POSIX-like systems
     '''
-    # Disable on these platorms, specific service modules exist:
-    disable = [
-        'Windows',
-        ]
-    if __grains__['os'] in disable:
+    if salt.utils.is_windows():
         return False
     return 'locate'
 
@@ -112,4 +111,3 @@ def locate(pattern, database='', limit=0, **kwargs):
     cmd = 'locate {0} {1}'.format(options, pattern)
     out = __salt__['cmd.run'](cmd).splitlines()
     return out
-

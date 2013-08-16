@@ -3,7 +3,8 @@ General management functions for salt, tools like seeing what hosts are up
 and what hosts are down
 '''
 
-import distutils.version
+# Import python libs
+import os
 
 # Import salt libs
 import salt.key
@@ -29,6 +30,48 @@ def status(output=True):
     return ret
 
 
+def key_regen():
+    '''
+    This routine is used to regenerate all keys in an environment. This is
+    invasive! ALL KEYS IN THE SALT ENVIRONMENT WILL BE REGENERATED!!
+
+    The key_regen routine sends a command out to minions to revoke the master
+    key and remove all minion keys, it then removes all keys from the master
+    and prompts the user to restart the master. The minions will all reconnect
+    and keys will be placed in pending.
+
+    After the master is restarted and minion keys are in the pending directory
+    execute a salt-key -A command to accept the regenerated minion keys.
+
+    The master *must* be restarted within 60 seconds of running this command or
+    the minions will think there is something wrong with the keys and abort.
+
+    Only Execute this runner after upgrading minions and master to 0.15.1 or
+    higher!
+    '''
+    client = salt.client.LocalClient(__opts__['conf_file'])
+    minions = client.cmd('*', 'saltutil.regen_keys')
+
+    for root, dirs, files in os.walk(__opts__['pki_dir']):
+        for fn_ in files:
+            path = os.path.join(root, fn_)
+            try:
+                os.remove(path)
+            except os.error:
+                pass
+    msg = ('The minion and master keys have been deleted.  Restart the Salt\n'
+           'Master within the next 60 seconds!!!\n\n'
+           'Wait for the minions to reconnect.  Once the minions reconnect\n'
+           'the new keys will appear in pending and will need to be re-\n'
+           'accepted by running:\n'
+           '    salt-key -A\n\n'
+           'Be advised that minions not currently connected to the master\n'
+           'will not be able to reconnect and may require manual\n'
+           'regeneration via a local call to\n'
+           '    salt-call saltutil.regen_keys')
+    print(msg)
+
+
 def down():
     '''
     Print a list of all the down or unresponsive salt minions
@@ -39,7 +82,7 @@ def down():
     return ret
 
 
-def up():  # pylint: disable-msg=C0103
+def up():  # pylint: disable=C0103
     '''
     Print a list of all of the minions that are up
     '''

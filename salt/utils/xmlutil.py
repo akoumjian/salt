@@ -2,11 +2,8 @@
 Various XML utilities
 '''
 
-# Import python libs
-import xml.etree.ElementTree as ET
-
 def to_dict(xmltree):
-    ''' 
+    '''
     Convert an XML tree into a dict. The tree that is passed in must be an
     ElementTree object.
     '''
@@ -23,12 +20,12 @@ def to_dict(xmltree):
     for item in xmltree:
         name = item.tag
         if '}' in name:
-            # If this xml tree has an xmlns attribute, then etree will add it
+            # If this XML tree has an xmlns attribute, then etree will add it
             # to the beginning of the tag, like: "{http://path}tag". This
             # aggression will not stand, man.
             comps = name.split('}')
             name = comps[1]
-        if not name in xmldict.keys():
+        if name not in xmldict:
             if len(item.getchildren()) > 0:
                 xmldict[name] = to_dict(item)
             else:
@@ -37,10 +34,7 @@ def to_dict(xmltree):
             # If a tag appears more than once in the same place, convert it to
             # a list. This may require that the caller watch for such a thing
             # to happen, and behave accordingly.
-            if type(xmldict[name]) is not list:
-                tempvar = xmldict[name]
-                xmldict[name] = []
-                xmldict[name].append(tempvar)
+            if not isinstance(xmldict[name], list):
+                xmldict[name] = [xmldict[name]]
             xmldict[name].append(to_dict(item))
     return xmldict
-
